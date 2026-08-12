@@ -31,7 +31,7 @@ if uploaded_file is not None:
         
         try:
             # CHANGED: Replaced localhost 127.0.0.1 with your Hugging Face space URL
-            BACKEND_URL = "https://YOUR-HUGGINGFACE-BACKEND-URL.hf.space" 
+            BACKEND_URL = "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" 
             
             response = requests.post(f"{BACKEND_URL}/process-audio", files=files, data=data_payload)
             if response.status_code == 200:
