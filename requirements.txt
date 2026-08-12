@@ -5,7 +5,4 @@ fpdf
 pydub
 SpeechRecognition
 python-multipart
-streamlit
-SpeechRecognition
-requests
-pydub
+
