@@ -19,7 +19,7 @@ app.add_middleware(
 )
 
 # 🔑 HUGGING FACE API KEY
-HF_TOKEN = "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"
+HF_TOKEN = "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"
 
 latest_data = {"transcription": "", "summary": "", "doctor": "", "patient": "", "date": ""}
 
