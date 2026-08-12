@@ -15,7 +15,7 @@ st.write("Professional Consultation & Clinical Documentation System")
 
 st.markdown("---")
 
-# Read token from Streamlit Secrets or hardcoded fallback
+# Hugging Face API Token (Streamlit Secrets ya hardcoded)
 HF_TOKEN = st.secrets.get("HF_TOKEN", "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")
 
 doc_input = st.text_input("Enter Doctor's Name:", value="Dr. Zainab")
@@ -23,7 +23,6 @@ patient_input = st.text_input("Enter Patient's Name (Type 'Auto-Detect' to let A
 
 uploaded_file = st.file_uploader("Select Audio File (Supported: WAV, MP3, M4A, OGG, AAC)", type=["wav", "mp3", "m4a", "ogg", "aac"])
 
-# Audio conversion helper
 def convert_audio_to_wav(file_bytes, input_ext):
     try:
         audio = AudioSegment.from_file(io.BytesIO(file_bytes), format=input_ext)
@@ -36,8 +35,7 @@ def convert_audio_to_wav(file_bytes, input_ext):
     except Exception:
         return io.BytesIO(file_bytes)
 
-# Direct Call to Hugging Face API
-def generate_medical_report_hf(transcription_text, doctor_name, patient_name):
+def generate_medical_report_backend(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
     ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
     
@@ -51,9 +49,10 @@ def generate_medical_report_hf(transcription_text, doctor_name, patient_name):
             "role": "system",
             "content": f"""You are an expert AI Medical Scribe.
 
-STRICT INSTRUCTIONS FOR CONTENT:
-1. Names: Transliterate Doctor Name and Patient Name into clean English script.
+STRICT INSTRUCTIONS FOR CONTENT & DETAILED WRITING:
+1. Names: Transliterate Doctor Name and Patient Name into clean English script (e.g., convert 'حجاب زارا' to 'Hijab Zara').
 2. Zero Unrelated Symptoms: Include ONLY complaints mentioned in transcript. Do NOT add unmentioned conditions.
+3. Detailed Output Style: Provide rich, professional clinical advice in the prescription and care plan.
 
 Format strictly as:
 
@@ -65,10 +64,11 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** (Summary based strictly on transcript)
+* **Chief Complaint:** (Detailed clinical summary based strictly on transcript)
 
-### 📝 Recommended Plan
+### 📝 Recommended Prescription & Plan
 
+* **Suggested Medication/Intervention:** (Based strictly on transcript)
 * **Advice/Next Steps:** (Based strictly on transcript)"""
         },
         {
@@ -141,7 +141,6 @@ if uploaded_file is not None:
     if st.button("Process & Generate Medical Report 🚀", use_container_width=True):
         st.info("AI is parsing clinical data and structure formatting... Please wait.")
         
-        # Reset previous session state to clear older errors/reports
         st.session_state["generated"] = False
         if "transcription" in st.session_state:
             del st.session_state["transcription"]
@@ -176,7 +175,7 @@ if uploaded_file is not None:
         pat_name = patient_input.strip() if patient_input and patient_input.strip() else "Auto-Detect"
         current_date = datetime.now().strftime("%Y-%m-%d")
 
-        summary_text = generate_medical_report_hf(text_result, doc_name, pat_name)
+        summary_text = generate_medical_report_backend(text_result, doc_name, pat_name)
 
         st.session_state["transcription"] = text_result
         st.session_state["summary"] = summary_text
