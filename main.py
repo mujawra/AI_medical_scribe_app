@@ -32,8 +32,8 @@ async def process_audio(
             
         audio_bytes = await audio.read()
         
-        # Hugging Face Inference Call
-        API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+        # Updated Hugging Face Router API Endpoint
+        API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3"
         headers = {"Authorization": f"Bearer {HF_TOKEN}"}
         
         hf_response = requests.post(API_URL, headers=headers, data=audio_bytes)
@@ -42,9 +42,9 @@ async def process_audio(
             result = hf_response.json()
             transcription = result.get("text", "Audio processed successfully.")
         else:
-            transcription = f"Audio received. Processing complete."
+            return {"status": "error", "message": f"Hugging Face API Error ({hf_response.status_code}): {hf_response.text}"}
 
-        summary = f"### 📋 Clinical Information\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {datetime.now().strftime('%Y-%m-%d')}\n\n### 🩺 Medical Summary\n* **Transcription:** {transcription}"
+        summary = f"### 📋 Clinical Information\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {datetime.now().strftime('%Y-%m-%d')}\n\n### 🩺 Medical Summary & Transcription\n{transcription}"
 
         return {
             "status": "success",
