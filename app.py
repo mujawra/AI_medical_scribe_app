@@ -9,7 +9,7 @@ st.write("Professional Consultation & Clinical Documentation System")
 st.markdown("---")
 
 # Vercel Live Backend Base URL
-BACKEND_URL = "https://ai-medical-scribe-cjlj5w460-mujawra1.vercel.app"
+BACKEND_URL = "https://ai-medical-scribe-app.vercel.app"
 
 doc_input = st.text_input("Enter Doctor's Name:", value="Dr. Zainab")
 patient_input = st.text_input("Enter Patient's Name (Type 'Auto-Detect' to let AI find it):", value="Auto-Detect")
