@@ -1,8 +1,5 @@
 fastapi
-uvicorn
-requests
-fpdf
-pydub
-SpeechRecognition
 python-multipart
+requests
+uvicorn
 
