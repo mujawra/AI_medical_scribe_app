@@ -16,33 +16,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 🔑 HUGGING FACE TOKEN (Environment variable or fallback)
 HF_TOKEN = os.getenv("HF_TOKEN", "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")
 
 latest_data = {"transcription": "", "summary": "", "doctor": "", "patient": "", "date": ""}
 
 @app.get("/")
+@app.get("/process-audio")
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
+
+def transcribe_audio_hf(audio_bytes: bytes) -> str:
+    """Extracts exact text from uploaded audio recording using Whisper Large v3."""
+    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    try:
+        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=30)
+        if response.status_code == 200:
+            res = response.json()
+            if isinstance(res, dict) and "text" in res:
+                return res["text"].strip()
+            elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
+                return res[0]["text"].strip()
+    except Exception as e:
+        print(f"Whisper API error: {e}")
+    return ""
 
 def generate_medical_report(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
     ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
-    
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
         "Content-Type": "application/json"
     }
 
+    # Dynamic AI prompt (No hardcoded medicines)
     messages = [
         {
             "role": "system",
             "content": f"""You are an expert AI Medical Scribe.
+Analyze the provided transcript and generate a medical report based ONLY on what the patient and doctor discussed.
 
-STRICT INSTRUCTIONS FOR CONTENT & DETAILED WRITING:
-1. Names: Transliterate Doctor Name and Patient Name into clean English script (e.g., convert 'حجاب زارا' to 'Hijab Zara').
-2. Zero Unrelated Symptoms: Include ONLY complaints mentioned in transcript. Do NOT add unmentioned conditions.
-3. Detailed Output Style: Provide rich, professional clinical advice in the prescription and care plan.
+STRICT INSTRUCTIONS:
+1. DO NOT hardcode or guess medications. Only suggest medications, dosages, and care plans relevant to the symptoms explicitly stated in the transcript.
+2. Transliterate names into clean English.
+3. If no specific complaints are found, state that clearly under Chief Complaint.
 
 Format strictly as:
 
@@ -54,17 +71,15 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** (Detailed clinical summary based strictly on transcript)
+* **Chief Complaint:** (Detailed clinical summary extracted strictly from transcript)
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-  * **[Medication Name]:** [Detailed dosage limits and administration.]
+  * **[Medication Name / Treatment]:** [Dosage and administration derived from audio context]
 * **Advice/Next Steps:**
-  * **Rest:** [Detailed recovery advice.]
-  * **Hydration:** [Liquid intake recommendations.]
-  * **Monitor Symptoms:** [Red-flag symptoms to watch out for.]
-  * **Follow-up:** [Timeline for review.]"""
+  * **Rest & Care:** [Tailored recovery guidance]
+  * **Follow-up:** [Recommended follow-up timing]"""
         },
         {
             "role": "user",
@@ -82,7 +97,7 @@ Format strictly as:
         payload = {
             "model": model_id,
             "messages": messages,
-            "temperature": 0.0,
+            "temperature": 0.1,
             "max_tokens": 700
         }
         try:
@@ -94,27 +109,10 @@ Format strictly as:
                     if output:
                         return output
         except Exception as err:
-            print(f"Error calling {model_id}: {str(err)}")
+            print(f"Error with {model_id}: {err}")
             continue
 
-    return f"""### 📋 Clinical Information
-
-* **Doctor Name:** {doctor_name}
-* **Patient Name:** {patient_name}
-* **Date:** {report_date}
-
-### 🩺 Medical Summary Report
-
-* **Chief Complaint:** Patient presents with general symptoms recorded in clinical conversation.
-
-### 📝 Recommended Prescription & Plan
-
-* **Suggested Medication/Intervention:**
-  * **Paracetamol (Acetaminophen):** 500mg orally as needed every 6 hours. Do not exceed 4g in 24 hours.
-* **Advice/Next Steps:**
-  * **Rest:** Ensure adequate bed rest.
-  * **Hydration:** Maintain fluid intake.
-  * **Monitor Symptoms:** Return if fever or symptoms worsen."""
+    return f"### 📋 Clinical Information\n\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {report_date}\n\n### 🩺 Medical Summary Report\n\n* **Chief Complaint:** {transcription_text}\n\n### 📝 Recommended Prescription & Plan\n\n* **Suggested Medication/Intervention:**\n  * Consultation recorded. Please consult physician for specific prescription based on symptoms."
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -123,53 +121,21 @@ def generate_robust_pdf(filename, summary_text, transcription_text, doc_name, pa
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
-    
     pdf.set_fill_color(26, 54, 93)
     pdf.rect(0, 0, 210, 32, 'F')
-    
     pdf.set_font("Helvetica", "B", 16)
     pdf.set_text_color(255, 255, 255)
     pdf.cell(0, 10, "CLINICAL CONVERSATION REPORT", ln=True, align="C")
-    
-    pdf.set_font("Helvetica", "I", 9)
-    pdf.cell(0, 5, "Official Consultation Log & AI Analysis", ln=True, align="C")
-    pdf.ln(12)
-    
-    pdf.set_fill_color(240, 244, 248)
+    pdf.ln(15)
+    pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(45, 55, 72)
-    
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(40, 7, " DOCTOR NAME:", border=1, fill=True)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(55, 7, f" {doc_name}", border=1)
-    
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(40, 7, " DATE OF RECORD:", border=1, fill=True)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(55, 7, f" {report_date}", border=1, ln=True)
-    
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.cell(40, 7, " PATIENT NAME:", border=1, fill=True)
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(150, 7, f" {pat_name}", border=1, ln=True)
-    
-    pdf.ln(8)
-    
-    pdf.set_font("Helvetica", "", 11)
-    pdf.set_text_color(45, 55, 72) 
-    
     safe_summary = clean_txt_for_pdf(summary_text)
     pdf.multi_cell(0, 7, safe_summary.strip())
     
     pdf.ln(10)
-    pdf.set_draw_color(203, 213, 224)
-    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-    pdf.ln(5)
-    
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_text_color(113, 128, 150)
-    pdf.cell(0, 6, "Raw Audio Transcript:", ln=True)
-    
+    pdf.cell(0, 6, "Detected Audio Transcript:", ln=True)
     pdf.set_font("Helvetica", "I", 9)
     safe_transcript = clean_txt_for_pdf(transcription_text)
     pdf.multi_cell(0, 5, f'"{safe_transcript}"')
@@ -188,21 +154,26 @@ async def process_audio(
     pat_name = patient_name.strip() if patient_name and patient_name.strip() else "Patient"
     current_date = datetime.now().strftime("%Y-%m-%d")
 
-    text_result = "Patient presented with continuous fever and mild headache for two days."
+    # Step 1: Detect actual audio speech
+    audio_content = await audio.read()
+    transcribed_text = transcribe_audio_hf(audio_content)
 
-    try:
-        summary_text = generate_medical_report(text_result, doc_name, pat_name)
-    except Exception as ai_err:
-        print(f"AI generation error: {str(ai_err)}")
-        summary_text = f"Audio Transcript: {text_result}\n\nNote: AI evaluation failed."
-    
-    latest_data["transcription"] = text_result
+    if not transcribed_text:
+        return {
+            "status": "error", 
+            "message": "Audio clear nahi thi ya speech detect nahi hui. Baraye meharbani saaf awaz mein dobara record karke upload karein."
+        }
+
+    # Step 2: Dynamic LLM Report Generation based strictly on recording
+    summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
+
+    latest_data["transcription"] = transcribed_text
     latest_data["summary"] = summary_text
     latest_data["doctor"] = doc_name
     latest_data["patient"] = pat_name
     latest_data["date"] = current_date
-    
-    return {"status": "success", "transcription": text_result, "summary": summary_text}
+
+    return {"status": "success", "transcription": transcribed_text, "summary": summary_text}
 
 @app.get("/download-pdf")
 @app.get("/download-pdf/")
