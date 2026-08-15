@@ -25,26 +25,29 @@ latest_data = {"transcription": "", "summary": "", "doctor": "", "patient": "", 
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
-def transcribe_audio_hf(audio_bytes: bytes, content_type: str) -> str:
+def transcribe_audio_hf(audio_bytes: bytes) -> str:
     token = os.getenv("HF_TOKEN", "").strip()
     if not token:
-        print("CRITICAL ERROR: HF_TOKEN environment variable is missing!")
+        print("CRITICAL ERROR: HF_TOKEN missing!")
         return ""
 
-    # Hugging Face whisper endpoints
+    # Working HF Speech Recognition Endpoints
     models = [
         "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo",
-        "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+        "https://api-inference.huggingface.co/models/openai/whisper-large-v3",
+        "https://api-inference.huggingface.co/models/openai/whisper-small"
     ]
 
+    # Hugging Face binary raw audio headers
     headers = {
         "Authorization": f"Bearer {token}",
+        "Content-Type": "audio/wav"
     }
 
     for api_url in models:
         try:
-            response = requests.post(api_url, headers=headers, data=audio_bytes, timeout=40)
-            print(f"Model: {api_url} | Response Code: {response.status_code}")
+            response = requests.post(api_url, headers=headers, data=audio_bytes, timeout=35)
+            print(f"HF Model: {api_url.split('/')[-1]} | Status: {response.status_code}")
             
             if response.status_code == 200:
                 res = response.json()
@@ -57,9 +60,9 @@ def transcribe_audio_hf(audio_bytes: bytes, content_type: str) -> str:
                 if text:
                     return text
             else:
-                print(f"HF Error Text: {response.text}")
+                print(f"HF Fail Response: {response.text}")
         except Exception as e:
-            print(f"Exception for {api_url}: {e}")
+            print(f"Exception on {api_url}: {e}")
             continue
 
     return ""
@@ -79,9 +82,9 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
 Analyze the audio transcript and generate a structured clinical report.
 
 STRICT INSTRUCTIONS:
-1. DO NOT write or prescribe any medications, drug names, or specific prescriptions.
-2. Extract the patient's exact symptoms, complaints, and timeline strictly from what was spoken in the transcript.
-3. Transliterate Roman Urdu/Hindi words into clear English.
+1. DO NOT write or prescribe any medications or drug names.
+2. Extract symptoms, illness, and patient complaints strictly from the audio transcript.
+3. Transliterate Roman Urdu/Hindi spoken words into English accurately.
 
 Format strictly as:
 
@@ -93,12 +96,12 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Detailed description of the symptoms and diseases mentioned by the patient in the transcript]
+* **Chief Complaint:** [Detailed clinical summary extracted strictly from transcript]
 
 ### 📝 Recommended Plan & Advice
 
-* **General Care:** [Self-care guidance, rest, and lifestyle advice based on symptoms]
-* **Follow-up:** [Timeline for physician checkup]"""
+* **General Care:** [Self-care guidance and lifestyle advice based on symptoms]
+* **Follow-up:** [Timeline for checkup]"""
         },
         {
             "role": "user",
@@ -130,8 +133,7 @@ Format strictly as:
             print(f"Error calling {model_id}: {err}")
             continue
 
-    # Fallback with required Headings (No Medications included)
-    return f"### 📋 Clinical Information\n\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {report_date}\n\n### 🩺 Medical Summary Report\n\n* **Chief Complaint:** {transcription_text}\n\n### 📝 Recommended Plan & Advice\n\n* **General Care:** Rest and hydration recommended.\n* **Follow-up:** Please follow up with your doctor if symptoms persist."
+    return f"### 📋 Clinical Information\n\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {report_date}\n\n### 🩺 Medical Summary Report\n\n* **Chief Complaint:** {transcription_text}\n\n### 📝 Recommended Plan & Advice\n\n* **General Care:** Rest and hydration recommended.\n* **Follow-up:** Please follow up with physician if symptoms persist."
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -175,13 +177,12 @@ async def process_audio(
 
     audio_content = await audio.read()
     
-    transcribed_text = transcribe_audio_hf(audio_content, audio.content_type)
+    transcribed_text = transcribe_audio_hf(audio_content)
 
-    # Agar transcription audio se extract na ho sakay
     if not transcribed_text:
         return {
             "status": "error", 
-            "message": "Audio transcription failed. Baraye meharbani saaf awaz (English / Clear voice) mein dobara audio upload karein."
+            "message": "Hugging Face model audio read nahi kar saka. Please clear voice recorder audio upload karein."
         }
 
     summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
