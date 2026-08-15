@@ -32,7 +32,7 @@ if audio_file is not None:
                 
                 # Request to FastAPI Backend
                 response = requests.post(
-                    f"{BACKEND_URL}/process-audio", 
+                    f"{BACKEND_URL}/process-audio/", 
                     files=files, 
                     data=data_payload, 
                     timeout=90
