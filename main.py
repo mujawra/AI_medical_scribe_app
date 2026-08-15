@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import os
 import requests
+import io
 from datetime import datetime
 from fpdf import FPDF
 
@@ -31,36 +32,37 @@ def transcribe_audio_hf(audio_bytes: bytes, filename: str) -> str:
         print("CRITICAL ERROR: HF_TOKEN missing!")
         return ""
 
+    # Updated Working Audio Recognition Models
     models = [
         "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo",
-        "https://api-inference.huggingface.co/models/openai/whisper-large-v3",
-        "https://api-inference.huggingface.co/models/openai/whisper-small"
+        "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
     ]
 
-    # Strategy 1: Send as Multipart Form Data (Fixes HF binary upload rejection)
     headers = {"Authorization": f"Bearer {token}"}
     params = {"wait_for_model": "true"}
 
+    # Fix 1: Try Multipart Form Data File Upload (Works best for WhatsApp .wav)
     for api_url in models:
         try:
-            files = {"file": (filename, audio_bytes, "audio/wav")}
-            response = requests.post(api_url, headers=headers, files=files, params=params, timeout=40)
-            print(f"HF Model: {api_url.split('/')[-1]} | Status: {response.status_code}")
-
-            if response.status_code == 200:
-                res = response.json()
-                text = ""
-                if isinstance(res, dict) and "text" in res:
-                    text = res["text"].strip()
-                elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
-                    text = res[0]["text"].strip()
-                
-                if text and len(text) > 1:
-                    return text
+            audio_file = io.BytesIO(audio_bytes)
+            audio_file.name = filename if filename else "recorded_audio.wav"
             
-            # Strategy 2: Fallback to Raw Binary Stream if multipart fails
+            files = {"file": (audio_file.name, audio_file, "audio/wav")}
+            
+            res = requests.post(api_url, headers=headers, files=files, params=params, timeout=45)
+            print(f"Model {api_url.split('/')[-1]} Multipart Status: {res.status_code}")
+
+            if res.status_code == 200:
+                data = res.json()
+                if isinstance(data, dict) and "text" in data:
+                    return data["text"].strip()
+                elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
+                    return res[0]["text"].strip()
+            
+            # Fix 2: Fallback Binary Stream Payload
             headers_raw = {"Authorization": f"Bearer {token}", "Content-Type": "audio/wav"}
             res_raw = requests.post(api_url, headers=headers_raw, data=audio_bytes, params=params, timeout=35)
+            
             if res_raw.status_code == 200:
                 data = res_raw.json()
                 if isinstance(data, dict) and "text" in data:
@@ -69,7 +71,7 @@ def transcribe_audio_hf(audio_bytes: bytes, filename: str) -> str:
                     return data[0]["text"].strip()
 
         except Exception as e:
-            print(f"Exception on {api_url}: {e}")
+            print(f"Exception error on {api_url}: {e}")
             continue
 
     return ""
@@ -82,8 +84,7 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
         "Content-Type": "application/json"
     }
 
-    # Dynamic Prompt: NO hardcoded medicines inside prompt.
-    # The AI dynamically detects illness & suggests appropriate medical intervention based on the audio transcript.
+    # Dynamic Analysis Prompt: Deduces symptoms and recommends non-prescription care dynamically
     messages = [
         {
             "role": "system",
@@ -92,7 +93,7 @@ Analyze the audio transcript of the patient-doctor interaction and generate a co
 
 DYNAMIC ANALYSIS GUIDELINES:
 1. Extract patient complaints, symptoms, and duration strictly from what was spoken in the transcript.
-2. Based ON THE EXTRACTED SYMPTOMS AND ILLNESS, dynamically suggest appropriate standard medications, medical interventions, or over-the-counter care suitable for those specific symptoms. DO NOT use hardcoded examples—deduce directly from the patient's condition described in the transcript.
+2. Based ON THE EXTRACTED SYMPTOMS AND ILLNESS, dynamically suggest appropriate standard medical care, general interventions, or standard guidance suitable for those specific symptoms. DO NOT use fixed hardcoded medicine examples in the prompt—deduce directly from the patient's condition described in the transcript.
 3. Transliterate any Roman Urdu / Hindi medical terms accurately into clear clinical English.
 
 Format strictly as:
@@ -106,12 +107,12 @@ Format strictly as:
 ### 🩺 Medical Summary Report
 
 * **Chief Complaint:** [Detailed description of symptoms, complaints, and timeline extracted from transcript]
-* **Possible Diagnosis:** [Clinical impression/diagnosis deduced from transcript]
+* **Possible Diagnosis:** [Clinical impression deduced strictly from transcript]
 
 ### 📝 Recommended Prescription & Plan
 
-* **Suggested Medication/Intervention:** [Dynamically suggested medications, dosages, or treatments appropriate for the detected condition]
-* **Advice/Next Steps:** [General care, lifestyle/dietary guidance, and follow-up timeline]"""
+* **Suggested Medication/Intervention:** [Dynamically suggested interventions or general treatment appropriate for detected symptoms]
+* **Advice/Next Steps:** [General care, lifestyle guidance, and follow-up timeline]"""
         },
         {
             "role": "user",
@@ -143,8 +144,7 @@ Format strictly as:
             print(f"Error calling {model_id}: {err}")
             continue
 
-    # Fallback response
-    return f"### 📋 Clinical Information\n\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {report_date}\n\n### 🩺 Medical Summary Report\n\n* **Chief Complaint:** {transcription_text}\n* **Possible Diagnosis:** Symptomatic evaluation required.\n\n### 📝 Recommended Prescription & Plan\n\n* **Suggested Medication/Intervention:** Consult physician for specific dosage and prescription.\n* **Advice/Next Steps:** Rest, proper hydration, and follow-up checkup as needed."
+    return f"### 📋 Clinical Information\n\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {report_date}\n\n### 🩺 Medical Summary Report\n\n* **Chief Complaint:** {transcription_text}\n* **Possible Diagnosis:** Evaluation based on audio consultation.\n\n### 📝 Recommended Prescription & Plan\n\n* **Suggested Medication/Intervention:** Consult attending doctor for appropriate dosage.\n* **Advice/Next Steps:** Rest, fluid intake, and re-evaluation if symptoms worsen."
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -188,6 +188,7 @@ async def process_audio(
 
     audio_content = await audio.read()
     
+    # Pass original filename for correct media header decoding
     transcribed_text = transcribe_audio_hf(audio_content, audio.filename or "audio.wav")
 
     if not transcribed_text:
