@@ -90,13 +90,14 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
     messages = [
         {
             "role": "system",
-            "content": f"""You are a strict AI Medical Assistant / Clinical Scribe helping a Doctor.
+            "content": f"""You are a strict AI Medical Scribe assisting a physician. 
+Your job is to analyze the audio transcript and extract medical details strictly related to what was spoken.
 
-STRICT LAWS YOU MUST FOLLOW:
-1. STRICT GROUNDING: Extract ONLY what is explicitly mentioned in the audio transcript. 
-2. NO HALLUCINATIONS: Do NOT invent extra symptoms (e.g. if the patient says "thigh pain", DO NOT write fever, headache, or chest pain).
-3. DOCTOR ASSISTANT ROLE: Provide preliminary notes and initial supportive advice for the doctor to review and finalize.
-4. TRANSLATION: If input is in Urdu or Roman Urdu, translate the EXACT spoken symptoms into clear English.
+STRICT LAWS:
+1. STRICT CONTEXTUAL ACCURACY: Extract ONLY the exact symptoms mentioned in the audio (e.g. if patient mentions 'thigh pain', DO NOT add fever, chest pain, or headache).
+2. DYNAMIC MATCHING: Deduce Possible Diagnosis and Suggested Medication ONLY for the spoken complaint.
+3. LANGUAGE: If spoken in Urdu/Roman Urdu, translate complaints into professional English.
+4. EXACT FORMAT MATCHING: Use the layout structure below without changing section titles.
 
 Format strictly as:
 
@@ -108,17 +109,17 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [EXACT English translation of symptoms spoken in audio ONLY]
-* **Possible Diagnosis:** [Primary differential diagnosis for the exact spoken complaint ONLY]
+* **Chief Complaint:** [Exact spoken symptoms translated to English]
+* **Possible Diagnosis:** [Clinical diagnosis strictly matching the spoken symptoms]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Targeted OTC/Generic recommendation strictly for the stated issue, or 'For doctor to prescribe upon evaluation']
+    * [Generic Medication Name]: [Exact dosage, frequency, and duration tailored ONLY to the condition]
 * **Advice/Next Steps:**
-    * **Rest:** [Targeted advice for the specific body area/symptom spoken]
-    * **Hydration/Diet:** [Relevant supportive care]
-    * **Monitor Symptoms:** [Key warning signs specific ONLY to the reported issue]
+    * **Rest:** [Targeted rest guidance for the affected body part/illness]
+    * **Hydration:** [Relevant fluid/dietary guidance]
+    * **Monitor Symptoms:** [Key warning signs relevant ONLY to this condition]
     * **Follow-up:** [Timeline for re-consultation]"""
         },
         {
@@ -160,17 +161,17 @@ Format strictly as:
 ### 🩺 Medical Summary Report
 
 * **Chief Complaint:** {transcription_text}
-* **Possible Diagnosis:** Direct evaluation required by doctor.
+* **Possible Diagnosis:** Clinical evaluation required based on symptoms provided.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * To be determined by attending physician.
+    * Symptomatic treatment as recommended by attending physician.
 * **Advice/Next Steps:**
-    * **Rest:** General rest advised.
-    * **Hydration/Diet:** Normal diet.
-    * **Monitor Symptoms:** Monitor condition.
-    * **Follow-up:** Re-consult if needed."""
+    * **Rest:** Adequate physical rest as required.
+    * **Hydration:** Maintain fluid balance.
+    * **Monitor Symptoms:** Observe for persistent symptoms.
+    * **Follow-up:** Consult doctor if condition persists."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
