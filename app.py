@@ -7,7 +7,7 @@ st.title("🩺 AI Medical Scribe")
 
 # 🔗 BACKEND URL (Ensure exact domain without trailing slash)
 # Streamlit app.py inside backend call
-BACKEND_URL = "https://ai-medical-scribe-app.vercel.app/process-audio"
+BACKEND_URL = "https://ai-medical-scribe-app.vercel.app/process-audio/"
 
 col1, col2 = st.columns(2)
 with col1:
