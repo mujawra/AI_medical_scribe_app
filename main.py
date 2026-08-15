@@ -35,17 +35,14 @@ def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
-    """Robust Hugging Face Whisper Large v3 Turbo Transcription"""
     API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    
     try:
         response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
         if response.status_code == 200:
             result = response.json()
             extracted_text = result.get("text", "").strip()
-            # Ignore standard Whisper noise hallucinations
-            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org", "you"]
+            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org"]
             if any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4:
                 return ""
             return extracted_text
@@ -54,13 +51,10 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
     return ""
 
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    """Multi-stage Audio Transcription to catch exact Urdu / English words"""
-    # 1st Priority: HF Whisper Large v3
     text = transcribe_audio_hf(audio_bytes)
     if text and len(text.strip()) > 3:
         return text.strip()
 
-    # 2nd Priority: Google Speech Recognition (Urdu - Pakistan)
     recognizer = sr.Recognizer()
     try:
         audio_file = io.BytesIO(audio_bytes)
@@ -73,7 +67,6 @@ def transcribe_audio_fallback(audio_bytes: bytes) -> str:
     except Exception as e:
         print(f"Urdu SpeechRecognition Warning: {e}")
 
-    # 3rd Priority: Google Speech Recognition (English)
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
@@ -98,11 +91,14 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
         {
             "role": "system",
             "content": f"""You are an expert AI Medical Scribe.
-Analyze the audio transcript and generate a professional clinical medical report strictly matching Pic 2 layout.
+Your job is to dynamically analyze the spoken audio transcript and create an accurate clinical report based strictly on what the patient or doctor discussed.
 
-ACCURACY RULES:
-1. Base the Chief Complaint ONLY on the spoken words in the transcript. Do NOT invent unrelated symptoms.
-2. If transcript is in Urdu, Roman Urdu, or Hindi, TRANSLATE IT ACCURATELY AND WRITE THE REPORT IN ENGLISH.
+DYNAMIC RULES:
+1. Extract ONLY the exact symptoms, pain areas, or complaints mentioned in the transcript.
+2. Deduce the primary possible diagnosis purely based on the specific symptoms spoken.
+3. Recommend standard generic over-the-counter or relevant medications and dosage strictly tailored to the detected illness.
+4. DO NOT use pre-filled or hardcoded diseases or drugs. If the transcript states "arm pain", prescribe/advise strictly for arm pain/musculoskeletal injury. If it states "stomach ache", prescribe strictly for gastrointestinal issues.
+5. If transcript is in Urdu, Roman Urdu, or Hindi, TRANSLATE IT ACCURATELY AND WRITE THE REPORT ENTIRELY IN PROFESSIONAL ENGLISH.
 
 Format strictly as:
 
@@ -114,18 +110,18 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Translate spoken complaints accurately to English and list symptoms here]
-* **Possible Diagnosis:** [Clinical condition deduced dynamically from transcript]
+* **Chief Complaint:** [Translate and list the exact symptoms spoken in the audio]
+* **Possible Diagnosis:** [Medical diagnosis derived strictly from the spoken complaints]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Medication Name (Generic Name)]: [Dosage, frequency, and duration tailored to condition]
+    * [Generic Medication Name for Spoken Condition]: [Specific Dosage, Frequency, and Duration suitable for the detected condition]
 * **Advice/Next Steps:**
-    * **Rest:** [Rest advice tailored to condition]
-    * **Hydration:** [Fluid intake guidance tailored to condition]
-    * **Monitor Symptoms:** [Symptom monitoring and warning sign instructions]
-    * **Follow-up:** [Follow-up appointment time frame]"""
+    * **Rest:** [Rest advice tailored specifically to the body part/illness mentioned]
+    * **Hydration/Diet:** [Relevant fluid or dietary advice]
+    * **Monitor Symptoms:** [Key danger signs to watch out for related to this illness]
+    * **Follow-up:** [Timeline for re-evaluation]"""
         },
         {
             "role": "user",
@@ -166,17 +162,17 @@ Format strictly as:
 ### 🩺 Medical Summary Report
 
 * **Chief Complaint:** {transcription_text}
-* **Possible Diagnosis:** Clinical evaluation required based on audio transcript.
+* **Possible Diagnosis:** Direct clinical assessment required based on patient transcript.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * Symptomatic treatment as recommended by physician.
+    * To be determined by attending physician following physical examination.
 * **Advice/Next Steps:**
-    * **Rest:** Ensure adequate rest to aid recovery.
-    * **Hydration:** Maintain good daily fluid intake.
-    * **Monitor Symptoms:** Observe for persistent or worsening symptoms.
-    * **Follow-up:** Consult doctor if condition does not improve in 2-3 days."""
+    * **Rest:** General rest recommended.
+    * **Hydration/Diet:** Maintain normal hydration and light diet.
+    * **Monitor Symptoms:** Monitor for progression or persistent symptoms.
+    * **Follow-up:** Re-consult if symptoms intensify."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -231,7 +227,7 @@ async def process_audio(
         transcribed_text = transcribe_audio_fallback(audio_content)
 
         if not transcribed_text:
-            transcribed_text = "Patient reported symptoms during consultation. Requires clinical review."
+            transcribed_text = "Audio recorded but transcription was unclear. Patient requested clinical review."
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
