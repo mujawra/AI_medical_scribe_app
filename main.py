@@ -20,10 +20,15 @@ app.add_middleware(
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 
-latest_data = {"transcription": "", "summary": "", "doctor": "", "patient": "", "date": ""}
+latest_data = {
+    "transcription": "No audio transcribed yet.", 
+    "summary": "No report generated yet.", 
+    "doctor": "Dr. Zainab", 
+    "patient": "Patient", 
+    "date": datetime.now().strftime("%Y-%m-%d")
+}
 
 @app.get("/")
-@app.get("/process-audio")
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
@@ -42,14 +47,11 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
     return ""
 
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    # First try HF Whisper API (Best for Mobile Audio)
     text = transcribe_audio_hf(audio_bytes)
     if text and len(text.strip()) > 2:
         return text.strip()
 
     recognizer = sr.Recognizer()
-    
-    # Try SpeechRecognition Urdu
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
@@ -61,7 +63,6 @@ def transcribe_audio_fallback(audio_bytes: bytes) -> str:
     except Exception as e:
         print(f"Urdu SpeechRecognition Warning: {e}")
 
-    # Try SpeechRecognition English
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
@@ -82,7 +83,6 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
         "Content-Type": "application/json"
     }
 
-    # Strict Pic 2 Matching Prompt
     messages = [
         {
             "role": "system",
@@ -210,10 +210,8 @@ async def process_audio(
     current_date = datetime.now().strftime("%Y-%m-%d")
 
     audio_content = await audio.read()
-    
     transcribed_text = transcribe_audio_fallback(audio_content)
 
-    # Dynamic fallback: Transcribe error handling without hardcoded fever text
     if not transcribed_text:
         transcribed_text = "Audio recorded but text transcription could not clear noise. Patient requested symptom review."
 
@@ -225,12 +223,19 @@ async def process_audio(
     latest_data["patient"] = pat_name
     latest_data["date"] = current_date
 
-    return {"status": "success", "transcription": transcribed_text, "summary": summary_text}
+    return {
+        "status": "success", 
+        "transcription": transcribed_text, 
+        "summary": summary_text,
+        "pdf_download_url": "/download-pdf"
+    }
 
 @app.get("/download-pdf")
 @app.get("/download-pdf/")
 async def download_pdf():
     pdf_filename = "/tmp/Clinical_Report.pdf"
+    
+    # Generate PDF dynamically using the latest stored session data
     generate_robust_pdf(
         pdf_filename, 
         latest_data["summary"], 
@@ -239,6 +244,15 @@ async def download_pdf():
         latest_data["patient"],
         latest_data["date"]
     )
+    
     if os.path.exists(pdf_filename):
-        return FileResponse(pdf_filename, media_type="application/pdf", filename="Clinical_Report.pdf")
-    return {"status": "error", "message": "PDF generation failed."}
+        return FileResponse(
+            path=pdf_filename, 
+            filename="Clinical_Report.pdf",
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": "attachment; filename=Clinical_Report.pdf",
+                "Access-Control-Expose-Headers": "Content-Disposition"
+            }
+        )
+    raise HTTPException(status_code=500, detail="PDF generation failed")
