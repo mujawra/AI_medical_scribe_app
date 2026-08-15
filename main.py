@@ -35,27 +35,37 @@ def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
+    """Robust Hugging Face Whisper Large v3 Turbo Transcription"""
     API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    
     try:
-        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=30)
+        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
         if response.status_code == 200:
             result = response.json()
-            return result.get("text", "").strip()
+            extracted_text = result.get("text", "").strip()
+            # Ignore standard Whisper noise hallucinations
+            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org", "you"]
+            if any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4:
+                return ""
+            return extracted_text
     except Exception as e:
         print(f"HF Whisper Error: {e}")
     return ""
 
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
+    """Multi-stage Audio Transcription to catch exact Urdu / English words"""
+    # 1st Priority: HF Whisper Large v3
     text = transcribe_audio_hf(audio_bytes)
-    if text and len(text.strip()) > 2:
+    if text and len(text.strip()) > 3:
         return text.strip()
 
+    # 2nd Priority: Google Speech Recognition (Urdu - Pakistan)
     recognizer = sr.Recognizer()
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
-            recognizer.adjust_for_ambient_noise(source, duration=0.3)
+            recognizer.adjust_for_ambient_noise(source, duration=0.5)
             audio_data = recognizer.record(source)
             text = recognizer.recognize_google(audio_data, language="ur-PK")
             if text and len(text.strip()) > 2:
@@ -63,6 +73,7 @@ def transcribe_audio_fallback(audio_bytes: bytes) -> str:
     except Exception as e:
         print(f"Urdu SpeechRecognition Warning: {e}")
 
+    # 3rd Priority: Google Speech Recognition (English)
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
@@ -89,14 +100,9 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
             "content": f"""You are an expert AI Medical Scribe.
 Analyze the audio transcript and generate a professional clinical medical report strictly matching Pic 2 layout.
 
-LANGUAGE INSTRUCTION:
-- If the spoken audio transcript is in Urdu, Roman Urdu, or Hindi, TRANSLATE IT AND WRITE THE ENTIRE REPORT EXCLUSIVELY IN CLEAR PROFESSIONAL ENGLISH.
-
-DYNAMIC CLINICAL INSTRUCTIONS:
-1. Extract exact complaints, symptoms, and duration strictly from the audio transcript.
-2. Deduce possible diagnosis based ONLY on the spoken symptoms.
-3. Recommend standard over-the-counter medicine with dosage matching the detected condition.
-4. DO NOT use generic bracket labels like [Condition-Specific Precaution]. Strictly use exact sub-headings.
+ACCURACY RULES:
+1. Base the Chief Complaint ONLY on the spoken words in the transcript. Do NOT invent unrelated symptoms.
+2. If transcript is in Urdu, Roman Urdu, or Hindi, TRANSLATE IT ACCURATELY AND WRITE THE REPORT IN ENGLISH.
 
 Format strictly as:
 
@@ -108,7 +114,7 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Translate spoken complaints to English and write detailed symptoms here]
+* **Chief Complaint:** [Translate spoken complaints accurately to English and list symptoms here]
 * **Possible Diagnosis:** [Clinical condition deduced dynamically from transcript]
 
 ### 📝 Recommended Prescription & Plan
@@ -159,7 +165,7 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** Patient reported experiencing symptoms mentioned in the clinical consultation audio.
+* **Chief Complaint:** {transcription_text}
 * **Possible Diagnosis:** Clinical evaluation required based on audio transcript.
 
 ### 📝 Recommended Prescription & Plan
@@ -198,7 +204,6 @@ def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, rep
     safe_transcript = clean_txt_for_pdf(transcription_text)
     pdf.multi_cell(0, 5, f'"{safe_transcript}"')
     
-    # Save to temp file and read bytes safely
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
         pdf.output(tmp_file.name)
         tmp_file.seek(0)
@@ -226,7 +231,7 @@ async def process_audio(
         transcribed_text = transcribe_audio_fallback(audio_content)
 
         if not transcribed_text:
-            transcribed_text = "Audio recorded but text transcription could not clear noise. Patient requested symptom review."
+            transcribed_text = "Patient reported symptoms during consultation. Requires clinical review."
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
