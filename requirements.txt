@@ -3,3 +3,4 @@ uvicorn
 requests
 fpdf2
 python-multipart
+SpeechRecognition
