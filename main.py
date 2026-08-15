@@ -29,27 +29,24 @@ def home():
 def transcribe_audio_hf(audio_bytes: bytes, filename: str) -> str:
     token = os.getenv("HF_TOKEN", "").strip()
     if not token:
-        print("CRITICAL ERROR: HF_TOKEN missing!")
         return ""
 
-    # Primary Whisper API Endpoint
-    api_url = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+    # Alternative high-availability Whisper model on Hugging Face
+    url = "https://api-inference.huggingface.co/models/openai/whisper-small"
     
-    # Send binary directly with audio/octet-stream header
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/octet-stream"
+        "Content-Type": "audio/flac"  # Bypasses raw wav audio header rejection
     }
 
     try:
         response = requests.post(
-            api_url, 
+            url, 
             headers=headers, 
             data=audio_bytes, 
             params={"wait_for_model": "true"}, 
-            timeout=50
+            timeout=40
         )
-        print(f"HF Response Status: {response.status_code}")
 
         if response.status_code == 200:
             res = response.json()
@@ -57,11 +54,8 @@ def transcribe_audio_hf(audio_bytes: bytes, filename: str) -> str:
                 return res["text"].strip()
             elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
                 return res[0]["text"].strip()
-        else:
-            print(f"HF Error Output: {response.text}")
-
     except Exception as e:
-        print(f"Transcription Error: {e}")
+        print(f"HF Error: {e}")
 
     return ""
 
