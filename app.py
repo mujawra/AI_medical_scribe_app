@@ -4,9 +4,8 @@ import requests
 st.set_page_config(page_title="AI Medical Scribe", page_icon="🩺", layout="wide")
 
 st.title("🩺 AI Medical Scribe")
-st.write("Upload audio to generate structured clinical reports.")
 
-# 🔗 BACKEND URL (Without trailing slash)
+# 🔗 BACKEND URL (Ensure exact domain without trailing slash)
 BACKEND_URL = "https://ai-medical-scribe-app.vercel.app"
 
 col1, col2 = st.columns(2)
@@ -23,19 +22,18 @@ if audio_file is not None:
     if st.button("Process & Generate Medical Report 🚀", type="primary"):
         with st.spinner("AI is parsing clinical data and structure formatting... Please wait."):
             try:
-                # Prepare payload
                 files = {"audio": (audio_file.name, audio_file.getvalue(), audio_file.type)}
                 data_payload = {
                     "doctor_name": doctor_name, 
                     "patient_name": patient_name
                 }
                 
-                # Request to FastAPI Backend
+                # Direct API Call
                 response = requests.post(
                     f"{BACKEND_URL}/process-audio/", 
                     files=files, 
                     data=data_payload, 
-                    timeout=90
+                    timeout=120
                 )
                 
                 if response.status_code == 200:
@@ -43,19 +41,21 @@ if audio_file is not None:
                     
                     if res_data.get("status") == "success":
                         st.success("Report Generated Successfully!")
-                        
                         st.subheader("🗣️ Detected Audio Transcript")
                         st.info(res_data.get("transcription", "No text transcribed."))
                         
                         st.subheader("📄 Generated Clinical Report")
                         st.markdown(res_data.get("summary", ""))
                         
-                        pdf_download_url = f"{BACKEND_URL}/download-pdf"
+                        pdf_download_url = f"{BACKEND_URL}/download-pdf/"
                         st.markdown(f"### [📥 Download Official PDF Report]({pdf_download_url})")
                     else:
-                        st.error(res_data.get("message", "Audio processing failed."))
+                        st.error(f"Backend Logic Error: {res_data.get('message')}")
                 else:
-                    st.error(f"Backend Returned HTTP Error {response.status_code}")
+                    st.error(f"HTTP Server Error: Status Code {response.status_code}")
+                    st.code(response.text)
                     
-            except requests.exceptions.RequestException as e:
-                st.error("Error: Connection to FastAPI backend refused. Check if Vercel server URL is accessible.")
+            except Exception as err:
+                # Direct Exception Output
+                st.error("Exact Connection / Python Exception:")
+                st.exception(err)
