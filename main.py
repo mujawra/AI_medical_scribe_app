@@ -24,56 +24,53 @@ latest_data = {"transcription": "", "summary": "", "doctor": "", "patient": "", 
 @app.get("/process-audio")
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
-def transcribe_audio_hf(audio_bytes: bytes) -> str:
+
+def transcribe_audio_hf(audio_bytes: bytes, filename: str) -> str:
     token = os.getenv("HF_TOKEN", "").strip()
     if not token:
         print("CRITICAL ERROR: HF_TOKEN missing!")
         return ""
 
-    # Hugging Face Whisper Endpoints
     models = [
-        "https://api-inference.huggingface.co/models/openai/whisper-large-v3",
         "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo",
+        "https://api-inference.huggingface.co/models/openai/whisper-large-v3",
         "https://api-inference.huggingface.co/models/openai/whisper-small"
     ]
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/octet-stream"  # Binary raw stream format for HF
-    }
+    # Strategy 1: Send as Multipart Form Data (Fixes HF binary upload rejection)
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"wait_for_model": "true"}
 
     for api_url in models:
-        for attempt in range(2):  # Auto retry if model is loading
-            try:
-                response = requests.post(
-                    api_url, 
-                    headers=headers, 
-                    data=audio_bytes, 
-                    params={"wait_for_model": "true"}, 
-                    timeout=45
-                )
-                print(f"HF Model: {api_url.split('/')[-1]} | Status: {response.status_code}")
+        try:
+            files = {"file": (filename, audio_bytes, "audio/wav")}
+            response = requests.post(api_url, headers=headers, files=files, params=params, timeout=40)
+            print(f"HF Model: {api_url.split('/')[-1]} | Status: {response.status_code}")
+
+            if response.status_code == 200:
+                res = response.json()
+                text = ""
+                if isinstance(res, dict) and "text" in res:
+                    text = res["text"].strip()
+                elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
+                    text = res[0]["text"].strip()
                 
-                if response.status_code == 200:
-                    res = response.json()
-                    text = ""
-                    if isinstance(res, dict) and "text" in res:
-                        text = res["text"].strip()
-                    elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
-                        text = res[0]["text"].strip()
-                    
-                    if text and len(text) > 2:
-                        return text
-                elif response.status_code == 503:
-                    # Model loading, wait and retry once
-                    import time
-                    time.sleep(5)
-                    continue
-                else:
-                    print(f"HF Error Output: {response.text}")
-            except Exception as e:
-                print(f"Exception on {api_url}: {e}")
-                break
+                if text and len(text) > 1:
+                    return text
+            
+            # Strategy 2: Fallback to Raw Binary Stream if multipart fails
+            headers_raw = {"Authorization": f"Bearer {token}", "Content-Type": "audio/wav"}
+            res_raw = requests.post(api_url, headers=headers_raw, data=audio_bytes, params=params, timeout=35)
+            if res_raw.status_code == 200:
+                data = res_raw.json()
+                if isinstance(data, dict) and "text" in data:
+                    return data["text"].strip()
+                elif isinstance(data, list) and len(data) > 0 and "text" in data[0]:
+                    return data[0]["text"].strip()
+
+        except Exception as e:
+            print(f"Exception on {api_url}: {e}")
+            continue
 
     return ""
 
@@ -85,16 +82,18 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
         "Content-Type": "application/json"
     }
 
+    # Dynamic Prompt: NO hardcoded medicines inside prompt.
+    # The AI dynamically detects illness & suggests appropriate medical intervention based on the audio transcript.
     messages = [
         {
             "role": "system",
             "content": f"""You are an expert AI Medical Scribe.
-Analyze the audio transcript and generate a structured clinical report.
+Analyze the audio transcript of the patient-doctor interaction and generate a complete clinical report.
 
-STRICT INSTRUCTIONS:
-1. DO NOT write or prescribe any medications or drug names.
-2. Extract symptoms, illness, and patient complaints strictly from the audio transcript.
-3. Transliterate Roman Urdu/Hindi spoken words into English accurately.
+DYNAMIC ANALYSIS GUIDELINES:
+1. Extract patient complaints, symptoms, and duration strictly from what was spoken in the transcript.
+2. Based ON THE EXTRACTED SYMPTOMS AND ILLNESS, dynamically suggest appropriate standard medications, medical interventions, or over-the-counter care suitable for those specific symptoms. DO NOT use hardcoded examples—deduce directly from the patient's condition described in the transcript.
+3. Transliterate any Roman Urdu / Hindi medical terms accurately into clear clinical English.
 
 Format strictly as:
 
@@ -106,12 +105,13 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Detailed clinical summary extracted strictly from transcript]
+* **Chief Complaint:** [Detailed description of symptoms, complaints, and timeline extracted from transcript]
+* **Possible Diagnosis:** [Clinical impression/diagnosis deduced from transcript]
 
-### 📝 Recommended Plan & Advice
+### 📝 Recommended Prescription & Plan
 
-* **General Care:** [Self-care guidance and lifestyle advice based on symptoms]
-* **Follow-up:** [Timeline for checkup]"""
+* **Suggested Medication/Intervention:** [Dynamically suggested medications, dosages, or treatments appropriate for the detected condition]
+* **Advice/Next Steps:** [General care, lifestyle/dietary guidance, and follow-up timeline]"""
         },
         {
             "role": "user",
@@ -128,7 +128,7 @@ Format strictly as:
         payload = {
             "model": model_id,
             "messages": messages,
-            "temperature": 0.1,
+            "temperature": 0.2,
             "max_tokens": 700
         }
         try:
@@ -143,7 +143,8 @@ Format strictly as:
             print(f"Error calling {model_id}: {err}")
             continue
 
-    return f"### 📋 Clinical Information\n\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {report_date}\n\n### 🩺 Medical Summary Report\n\n* **Chief Complaint:** {transcription_text}\n\n### 📝 Recommended Plan & Advice\n\n* **General Care:** Rest and hydration recommended.\n* **Follow-up:** Please follow up with physician if symptoms persist."
+    # Fallback response
+    return f"### 📋 Clinical Information\n\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {report_date}\n\n### 🩺 Medical Summary Report\n\n* **Chief Complaint:** {transcription_text}\n* **Possible Diagnosis:** Symptomatic evaluation required.\n\n### 📝 Recommended Prescription & Plan\n\n* **Suggested Medication/Intervention:** Consult physician for specific dosage and prescription.\n* **Advice/Next Steps:** Rest, proper hydration, and follow-up checkup as needed."
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -187,12 +188,12 @@ async def process_audio(
 
     audio_content = await audio.read()
     
-    transcribed_text = transcribe_audio_hf(audio_content)
+    transcribed_text = transcribe_audio_hf(audio_content, audio.filename or "audio.wav")
 
     if not transcribed_text:
         return {
             "status": "error", 
-            "message": "Hugging Face model audio read nahi kar saka. Please clear voice recorder audio upload karein."
+            "message": "Audio transcription failed. Baraye meharbani saaf awaz mein dobara audio upload karein."
         }
 
     summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
