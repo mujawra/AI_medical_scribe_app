@@ -16,7 +16,9 @@ uploaded_file = st.file_uploader(
     type=["wav", "mp3", "m4a", "ogg", "aac", "flac", "wma"]
 )
 
-BACKEND_URL = "https://ai-medical-scribe-app.vercel.app/process-audio/"
+BASE_URL = "https://ai-medical-scribe-app.vercel.app"
+PROCESS_URL = f"{BASE_URL}/process-audio/"
+DOWNLOAD_URL = f"{BASE_URL}/download-pdf/"
 
 if uploaded_file is not None:
     st.audio(uploaded_file)
@@ -32,13 +34,15 @@ if uploaded_file is not None:
                     "patient_name": patient_name
                 }
                 
-                response = requests.post(BACKEND_URL, files=files, data=data, timeout=60)
+                response = requests.post(PROCESS_URL, files=files, data=data, timeout=60)
                 
                 if response.status_code == 200:
                     res_json = response.json()
                     if res_json.get("status") == "success":
                         st.success("Report Generated Successfully!")
-                        st.markdown(res_json.get("summary"))
+                        
+                        # Store summary in session state to persist on rerun
+                        st.session_state["report_summary"] = res_json.get("summary")
                     else:
                         st.error(res_json.get("message", "Error processing audio."))
                 else:
@@ -46,3 +50,24 @@ if uploaded_file is not None:
                     st.json(response.json())
             except Exception as e:
                 st.error(f"Connection Error: {e}")
+
+# Display Report and PDF Download Button if report exists in session state
+if "report_summary" in st.session_state:
+    st.markdown(st.session_state["report_summary"])
+    st.divider()
+    
+    # Fetch PDF from backend
+    try:
+        pdf_response = requests.get(DOWNLOAD_URL, timeout=30)
+        if pdf_response.status_code == 200:
+            st.download_button(
+                label="📥 Download PDF Report",
+                data=pdf_response.content,
+                file_name="Clinical_Report.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+        else:
+            st.warning("PDF generated on server but download link couldn't be loaded.")
+    except Exception as e:
+        st.error(f"Could not load PDF download option: {e}")
