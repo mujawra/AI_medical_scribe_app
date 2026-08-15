@@ -16,7 +16,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-HF_TOKEN = os.getenv("HF_TOKEN", "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")
+HF_TOKEN = os.getenv("HF_TOKEN", "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")
 
 latest_data = {"transcription": "", "summary": "", "doctor": "", "patient": "", "date": ""}
 
