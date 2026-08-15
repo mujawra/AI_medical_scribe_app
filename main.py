@@ -1,9 +1,10 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 import os
 import requests
 import io
+import base64
 import speech_recognition as sr
 from datetime import datetime
 from fpdf import FPDF
@@ -33,10 +34,8 @@ def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
-    """Accurate Hugging Face Whisper API transcription for Urdu and English mobile voice recordings"""
     API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    
     try:
         response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=30)
         if response.status_code == 200:
@@ -93,10 +92,10 @@ LANGUAGE INSTRUCTION:
 - If the spoken audio transcript is in Urdu, Roman Urdu, or Hindi, TRANSLATE IT AND WRITE THE ENTIRE REPORT EXCLUSIVELY IN CLEAR PROFESSIONAL ENGLISH.
 
 DYNAMIC CLINICAL INSTRUCTIONS:
-1. Extract exact complaints, symptoms, and duration strictly from the audio transcript (translate Urdu to English).
+1. Extract exact complaints, symptoms, and duration strictly from the audio transcript.
 2. Deduce possible diagnosis based ONLY on the spoken symptoms.
 3. Recommend standard over-the-counter medicine with dosage matching the detected condition.
-4. DO NOT use generic bracket labels like [Condition-Specific Precaution]. Strictly use the exact sub-headings as formatted below.
+4. DO NOT use generic bracket labels like [Condition-Specific Precaution]. Strictly use exact sub-headings.
 
 Format strictly as:
 
@@ -220,6 +219,9 @@ async def process_audio(
 
     summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
+    pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
+    pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+
     latest_data["transcription"] = transcribed_text
     latest_data["summary"] = summary_text
     latest_data["doctor"] = doc_name
@@ -229,7 +231,8 @@ async def process_audio(
     return {
         "status": "success", 
         "transcription": transcribed_text, 
-        "summary": summary_text
+        "summary": summary_text,
+        "pdf_base64": pdf_base64
     }
 
 @app.get("/download-pdf")
