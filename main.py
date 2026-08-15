@@ -32,47 +32,36 @@ def transcribe_audio_hf(audio_bytes: bytes, filename: str) -> str:
         print("CRITICAL ERROR: HF_TOKEN missing!")
         return ""
 
-    # Updated Working Audio Recognition Models
-    models = [
-        "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo",
-        "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
-    ]
+    # Primary Whisper API Endpoint
+    api_url = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+    
+    # Send binary directly with audio/octet-stream header
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/octet-stream"
+    }
 
-    headers = {"Authorization": f"Bearer {token}"}
-    params = {"wait_for_model": "true"}
+    try:
+        response = requests.post(
+            api_url, 
+            headers=headers, 
+            data=audio_bytes, 
+            params={"wait_for_model": "true"}, 
+            timeout=50
+        )
+        print(f"HF Response Status: {response.status_code}")
 
-    # Fix 1: Try Multipart Form Data File Upload (Works best for WhatsApp .wav)
-    for api_url in models:
-        try:
-            audio_file = io.BytesIO(audio_bytes)
-            audio_file.name = filename if filename else "recorded_audio.wav"
-            
-            files = {"file": (audio_file.name, audio_file, "audio/wav")}
-            
-            res = requests.post(api_url, headers=headers, files=files, params=params, timeout=45)
-            print(f"Model {api_url.split('/')[-1]} Multipart Status: {res.status_code}")
+        if response.status_code == 200:
+            res = response.json()
+            if isinstance(res, dict) and "text" in res:
+                return res["text"].strip()
+            elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
+                return res[0]["text"].strip()
+        else:
+            print(f"HF Error Output: {response.text}")
 
-            if res.status_code == 200:
-                data = res.json()
-                if isinstance(data, dict) and "text" in data:
-                    return data["text"].strip()
-                elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
-                    return res[0]["text"].strip()
-            
-            # Fix 2: Fallback Binary Stream Payload
-            headers_raw = {"Authorization": f"Bearer {token}", "Content-Type": "audio/wav"}
-            res_raw = requests.post(api_url, headers=headers_raw, data=audio_bytes, params=params, timeout=35)
-            
-            if res_raw.status_code == 200:
-                data = res_raw.json()
-                if isinstance(data, dict) and "text" in data:
-                    return data["text"].strip()
-                elif isinstance(data, list) and len(data) > 0 and "text" in data[0]:
-                    return data[0]["text"].strip()
-
-        except Exception as e:
-            print(f"Exception error on {api_url}: {e}")
-            continue
+    except Exception as e:
+        print(f"Transcription Error: {e}")
 
     return ""
 
