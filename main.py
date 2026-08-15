@@ -16,7 +16,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-HF_TOKEN = os.getenv("HF_TOKEN", "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")
+HF_TOKEN = os.getenv("HF_TOKEN", "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")
 
 latest_data = {"transcription": "", "summary": "", "doctor": "", "patient": "", "date": ""}
 
@@ -26,7 +26,6 @@ def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
-    """Extracts exact text from uploaded audio recording using Whisper Large v3."""
     API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     try:
@@ -49,17 +48,16 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
         "Content-Type": "application/json"
     }
 
-    # Dynamic AI prompt (No hardcoded medicines)
     messages = [
         {
             "role": "system",
             "content": f"""You are an expert AI Medical Scribe.
-Analyze the provided transcript and generate a medical report based ONLY on what the patient and doctor discussed.
+Analyze the transcript and generate a structured clinical report based ONLY on what was actually said.
 
 STRICT INSTRUCTIONS:
-1. DO NOT hardcode or guess medications. Only suggest medications, dosages, and care plans relevant to the symptoms explicitly stated in the transcript.
-2. Transliterate names into clean English.
-3. If no specific complaints are found, state that clearly under Chief Complaint.
+1. DO NOT hardcode or guess medications.
+2. Only suggest medications, dosages, and recommendations relevant to symptoms stated in transcript.
+3. Transliterate names/words accurately into clean English.
 
 Format strictly as:
 
@@ -76,10 +74,10 @@ Format strictly as:
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-  * **[Medication Name / Treatment]:** [Dosage and administration derived from audio context]
+  * **[Medication / Care Plan]:** [Dosage / guidance strictly based on audio context]
 * **Advice/Next Steps:**
-  * **Rest & Care:** [Tailored recovery guidance]
-  * **Follow-up:** [Recommended follow-up timing]"""
+  * **Rest & Recovery:** [Tailored advice]
+  * **Follow-up:** [Timeline for checkup]"""
         },
         {
             "role": "user",
@@ -89,8 +87,7 @@ Format strictly as:
 
     models_to_try = [
         "Qwen/Qwen2.5-7B-Instruct",
-        "meta-llama/Llama-3.1-8B-Instruct",
-        "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
+        "meta-llama/Llama-3.1-8B-Instruct"
     ]
 
     for model_id in models_to_try:
@@ -109,10 +106,10 @@ Format strictly as:
                     if output:
                         return output
         except Exception as err:
-            print(f"Error with {model_id}: {err}")
+            print(f"Error calling {model_id}: {err}")
             continue
 
-    return f"### 📋 Clinical Information\n\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {report_date}\n\n### 🩺 Medical Summary Report\n\n* **Chief Complaint:** {transcription_text}\n\n### 📝 Recommended Prescription & Plan\n\n* **Suggested Medication/Intervention:**\n  * Consultation recorded. Please consult physician for specific prescription based on symptoms."
+    return f"### 📋 Clinical Information\n\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {report_date}\n\n### 🩺 Medical Summary Report\n\n* **Chief Complaint:** {transcription_text}\n\n### 📝 Recommended Prescription & Plan\n\n* **Advice:** Patient recorded consultation. Please follow up with physician."
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -154,17 +151,15 @@ async def process_audio(
     pat_name = patient_name.strip() if patient_name and patient_name.strip() else "Patient"
     current_date = datetime.now().strftime("%Y-%m-%d")
 
-    # Step 1: Detect actual audio speech
     audio_content = await audio.read()
     transcribed_text = transcribe_audio_hf(audio_content)
 
     if not transcribed_text:
         return {
             "status": "error", 
-            "message": "Audio clear nahi thi ya speech detect nahi hui. Baraye meharbani saaf awaz mein dobara record karke upload karein."
+            "message": "Audio clear nahi thi. Baraye meharbani saaf awaz mein dobara record karein."
         }
 
-    # Step 2: Dynamic LLM Report Generation based strictly on recording
     summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
     latest_data["transcription"] = transcribed_text
