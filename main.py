@@ -16,7 +16,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Fetch HF_TOKEN securely from Vercel Environment Variables
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 
 latest_data = {"transcription": "", "summary": "", "doctor": "", "patient": "", "date": ""}
@@ -27,42 +26,43 @@ def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
 def transcribe_audio_hf(audio_bytes: bytes, content_type: str) -> str:
-    # Reliable models list
-    models = [
-        "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo",
-        "https://api-inference.huggingface.co/models/openai/whisper-small"
-    ]
-    
-    # Read token directly
     token = os.getenv("HF_TOKEN", "").strip()
     if not token:
-        print("CRITICAL ERROR: HF_TOKEN environment variable is missing in Vercel!")
-        return "Patient reported feeling unwell. Consultation details recorded successfully."
+        print("CRITICAL ERROR: HF_TOKEN environment variable is missing!")
+        return ""
+
+    # Hugging Face whisper endpoints
+    models = [
+        "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo",
+        "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+    ]
 
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": content_type or "audio/wav"
     }
-    
+
     for api_url in models:
         try:
-            response = requests.post(api_url, headers=headers, data=audio_bytes, timeout=30)
+            response = requests.post(api_url, headers=headers, data=audio_bytes, timeout=40)
             print(f"Model: {api_url} | Response Code: {response.status_code}")
             
             if response.status_code == 200:
                 res = response.json()
+                text = ""
                 if isinstance(res, dict) and "text" in res:
-                    return res["text"].strip()
+                    text = res["text"].strip()
                 elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
-                    return res[0]["text"].strip()
+                    text = res[0]["text"].strip()
+                
+                if text:
+                    return text
             else:
                 print(f"HF Error Text: {response.text}")
         except Exception as e:
             print(f"Exception for {api_url}: {e}")
             continue
 
-    # Graceful fallback so UI never blocks the user
-    return "Patient presented with clinical symptoms requiring diagnostic evaluation."
+    return ""
 
 def generate_medical_report(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
@@ -76,12 +76,12 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
         {
             "role": "system",
             "content": f"""You are an expert AI Medical Scribe.
-Analyze the transcript and generate a structured clinical report based ONLY on what was actually said.
+Analyze the audio transcript and generate a structured clinical report.
 
 STRICT INSTRUCTIONS:
-1. DO NOT hardcode or guess medications.
-2. Only suggest medications, dosages, and recommendations relevant to symptoms stated in transcript.
-3. Transliterate names/words accurately into clean English.
+1. DO NOT write or prescribe any medications, drug names, or specific prescriptions.
+2. Extract the patient's exact symptoms, complaints, and timeline strictly from what was spoken in the transcript.
+3. Transliterate Roman Urdu/Hindi words into clear English.
 
 Format strictly as:
 
@@ -93,15 +93,12 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** (Detailed clinical summary extracted strictly from transcript)
+* **Chief Complaint:** [Detailed description of the symptoms and diseases mentioned by the patient in the transcript]
 
-### 📝 Recommended Prescription & Plan
+### 📝 Recommended Plan & Advice
 
-* **Suggested Medication/Intervention:**
-  * **[Medication / Care Plan]:** [Dosage / guidance strictly based on audio context]
-* **Advice/Next Steps:**
-  * **Rest & Recovery:** [Tailored advice]
-  * **Follow-up:** [Timeline for checkup]"""
+* **General Care:** [Self-care guidance, rest, and lifestyle advice based on symptoms]
+* **Follow-up:** [Timeline for physician checkup]"""
         },
         {
             "role": "user",
@@ -133,7 +130,8 @@ Format strictly as:
             print(f"Error calling {model_id}: {err}")
             continue
 
-    return f"### 📋 Clinical Information\n\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {report_date}\n\n### 🩺 Medical Summary Report\n\n* **Chief Complaint:** {transcription_text}\n\n### 📝 Recommended Prescription & Plan\n\n* **Advice:** Patient recorded consultation. Please follow up with physician."
+    # Fallback with required Headings (No Medications included)
+    return f"### 📋 Clinical Information\n\n* **Doctor Name:** {doctor_name}\n* **Patient Name:** {patient_name}\n* **Date:** {report_date}\n\n### 🩺 Medical Summary Report\n\n* **Chief Complaint:** {transcription_text}\n\n### 📝 Recommended Plan & Advice\n\n* **General Care:** Rest and hydration recommended.\n* **Follow-up:** Please follow up with your doctor if symptoms persist."
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -163,7 +161,6 @@ def generate_robust_pdf(filename, summary_text, transcription_text, doc_name, pa
     
     pdf.output(filename)
 
-# Updated decorator to capture all slash combinations
 @app.post("/process-audio")
 @app.post("/process-audio/")
 async def process_audio(
@@ -178,13 +175,13 @@ async def process_audio(
 
     audio_content = await audio.read()
     
-    # Pass content-type from UploadFile to HF API
     transcribed_text = transcribe_audio_hf(audio_content, audio.content_type)
 
+    # Agar transcription audio se extract na ho sakay
     if not transcribed_text:
         return {
             "status": "error", 
-            "message": "Audio clear nahi thi. Baraye meharbani saaf awaz mein dobara record karein."
+            "message": "Audio transcription failed. Baraye meharbani saaf awaz (English / Clear voice) mein dobara audio upload karein."
         }
 
     summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
