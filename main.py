@@ -63,20 +63,18 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
         "Content-Type": "application/json"
     }
 
-    # Dynamic Audio-Based Deductions Prompt (No Hardcoded Diseases/Meds)
     messages = [
         {
             "role": "system",
-            "content": f"""You are an expert AI Medical Scribe.
-Analyze the provided audio transcript and generate a structured clinical report strictly matching the layout of Pic 2.
+            "content": f"""You are an expert AI Medical Scribe and Clinical Assistant.
+Analyze the audio transcript and generate a structured medical report.
 
-DYNAMIC CLINICAL INSTRUCTIONS:
-1. Extract exact complaints, symptoms, and timeline explicitly mentioned in the audio.
-2. Deduce the Possible Diagnosis based ONLY on the actual symptoms described in the transcript.
-3. PRECAUTIONS & ADVICE MUST BE 100% SPECIFIC TO THE DETECTED CONDITION:
-   - Do NOT use hardcoded generic advice or fixed templates.
-   - Dynamically tailor all advice, precautions, and follow-ups strictly to the exact illness/symptoms found in the transcript.
-4. For 'Suggested Medication/Intervention', list medications ONLY if explicitly spoken in the audio. If no medications were spoken, state "No specific medication mentioned in audio".
+INSTRUCTIONS:
+1. Extract exact complaints from the spoken audio transcript.
+2. DEDUCE the likely medical condition/disease dynamically based on the audio symptoms.
+3. RECOMMEND standard over-the-counter (OTC) medications with dosage, timing, and duration matching the detected condition (e.g., dosage frequency like 'once daily', 'every 8 hours', etc.).
+4. GENERATE specific, actionable advice/precautions tailored strictly to the condition.
+5. DO NOT print bracketed placeholder text like '[Condition-Specific Precaution 1]'. Write pure, natural English text directly under bullet points.
 
 Format strictly as:
 
@@ -88,17 +86,17 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Detailed description of symptoms extracted strictly from the audio]
-* **Possible Diagnosis:** [Clinical impression deduced strictly from audio symptoms]
+* **Chief Complaint:** Write the exact patient complaints and symptoms spoken in the audio.
+* **Possible Diagnosis:** Write the clinical impression deduced from the symptoms.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Explicitly mentioned medications with dosage if spoken, or "No specific medication mentioned in audio"]
+    * Write specific medication name, dosage, and intake timing matching the condition.
 * **Advice/Next Steps:**
-    * **[Condition-Specific Precaution 1]:** [Detailed precaution tailored strictly to the detected illness]
-    * **[Condition-Specific Precaution 2]:** [Second precaution tailored strictly to the detected illness]
-    * **[Condition-Specific Precaution 3]:** [Targeted follow-up instruction relevant to this condition]"""
+    * Write the primary dietary or activity precaution for this condition.
+    * Write secondary care instructions or relief methods.
+    * Write follow-up or warning sign guidance."""
         },
         {
             "role": "user",
@@ -115,7 +113,7 @@ Format strictly as:
         payload = {
             "model": model_id,
             "messages": messages,
-            "temperature": 0.1,
+            "temperature": 0.2,
             "max_tokens": 800
         }
         try:
@@ -130,7 +128,6 @@ Format strictly as:
             print(f"Error calling {model_id}: {err}")
             continue
 
-    # Fallback Structure
     return f"""### 📋 Clinical Information
 
 * **Doctor Name:** {doctor_name}
@@ -140,15 +137,16 @@ Format strictly as:
 ### 🩺 Medical Summary Report
 
 * **Chief Complaint:** {transcription_text}
-* **Possible Diagnosis:** Clinical evaluation required based on spoken symptoms.
+* **Possible Diagnosis:** Symptomatic evaluation based on clinical audio transcript.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * No specific medication mentioned in audio.
+    * Symptomatic relief medication as advised by the consulting doctor.
 * **Advice/Next Steps:**
-    * **Targeted Care:** Follow condition-specific care guidance as recommended by physician.
-    * **Monitoring:** Observe symptoms closely and seek re-evaluation if condition worsens."""
+    * Rest and monitor symptoms closely.
+    * Maintain adequate hydration and proper nutrition.
+    * Re-evaluate with a physician if symptoms persist."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -195,7 +193,7 @@ async def process_audio(
     transcribed_text = transcribe_audio_fallback(audio_content)
 
     if not transcribed_text:
-        transcribed_text = "Patient reported symptoms during voice consultation."
+        transcribed_text = "Patient reported experiencing symptoms during voice consultation."
 
     summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
