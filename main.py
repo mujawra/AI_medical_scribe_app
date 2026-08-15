@@ -163,6 +163,7 @@ def generate_robust_pdf(filename, summary_text, transcription_text, doc_name, pa
     
     pdf.output(filename)
 
+# Updated decorator to capture all slash combinations
 @app.post("/process-audio")
 @app.post("/process-audio/")
 async def process_audio(
