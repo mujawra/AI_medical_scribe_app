@@ -90,15 +90,13 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
     messages = [
         {
             "role": "system",
-            "content": f"""You are an expert AI Medical Scribe.
-Your job is to dynamically analyze the spoken audio transcript and create an accurate clinical report based strictly on what the patient or doctor discussed.
+            "content": f"""You are a strict AI Medical Assistant / Clinical Scribe helping a Doctor.
 
-DYNAMIC RULES:
-1. Extract ONLY the exact symptoms, pain areas, or complaints mentioned in the transcript.
-2. Deduce the primary possible diagnosis purely based on the specific symptoms spoken.
-3. Recommend standard generic over-the-counter or relevant medications and dosage strictly tailored to the detected illness.
-4. DO NOT use pre-filled or hardcoded diseases or drugs. If the transcript states "arm pain", prescribe/advise strictly for arm pain/musculoskeletal injury. If it states "stomach ache", prescribe strictly for gastrointestinal issues.
-5. If transcript is in Urdu, Roman Urdu, or Hindi, TRANSLATE IT ACCURATELY AND WRITE THE REPORT ENTIRELY IN PROFESSIONAL ENGLISH.
+STRICT LAWS YOU MUST FOLLOW:
+1. STRICT GROUNDING: Extract ONLY what is explicitly mentioned in the audio transcript. 
+2. NO HALLUCINATIONS: Do NOT invent extra symptoms (e.g. if the patient says "thigh pain", DO NOT write fever, headache, or chest pain).
+3. DOCTOR ASSISTANT ROLE: Provide preliminary notes and initial supportive advice for the doctor to review and finalize.
+4. TRANSLATION: If input is in Urdu or Roman Urdu, translate the EXACT spoken symptoms into clear English.
 
 Format strictly as:
 
@@ -110,22 +108,22 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Translate and list the exact symptoms spoken in the audio]
-* **Possible Diagnosis:** [Medical diagnosis derived strictly from the spoken complaints]
+* **Chief Complaint:** [EXACT English translation of symptoms spoken in audio ONLY]
+* **Possible Diagnosis:** [Primary differential diagnosis for the exact spoken complaint ONLY]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Generic Medication Name for Spoken Condition]: [Specific Dosage, Frequency, and Duration suitable for the detected condition]
+    * [Targeted OTC/Generic recommendation strictly for the stated issue, or 'For doctor to prescribe upon evaluation']
 * **Advice/Next Steps:**
-    * **Rest:** [Rest advice tailored specifically to the body part/illness mentioned]
-    * **Hydration/Diet:** [Relevant fluid or dietary advice]
-    * **Monitor Symptoms:** [Key danger signs to watch out for related to this illness]
-    * **Follow-up:** [Timeline for re-evaluation]"""
+    * **Rest:** [Targeted advice for the specific body area/symptom spoken]
+    * **Hydration/Diet:** [Relevant supportive care]
+    * **Monitor Symptoms:** [Key warning signs specific ONLY to the reported issue]
+    * **Follow-up:** [Timeline for re-consultation]"""
         },
         {
             "role": "user",
-            "content": f'Audio Transcript: "{transcription_text}"'
+            "content": f'Spoken Audio Transcript: "{transcription_text}"'
         }
     ]
 
@@ -138,7 +136,7 @@ Format strictly as:
         payload = {
             "model": model_id,
             "messages": messages,
-            "temperature": 0.1,
+            "temperature": 0.0,
             "max_tokens": 800
         }
         try:
@@ -162,17 +160,17 @@ Format strictly as:
 ### 🩺 Medical Summary Report
 
 * **Chief Complaint:** {transcription_text}
-* **Possible Diagnosis:** Direct clinical assessment required based on patient transcript.
+* **Possible Diagnosis:** Direct evaluation required by doctor.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * To be determined by attending physician following physical examination.
+    * To be determined by attending physician.
 * **Advice/Next Steps:**
-    * **Rest:** General rest recommended.
-    * **Hydration/Diet:** Maintain normal hydration and light diet.
-    * **Monitor Symptoms:** Monitor for progression or persistent symptoms.
-    * **Follow-up:** Re-consult if symptoms intensify."""
+    * **Rest:** General rest advised.
+    * **Hydration/Diet:** Normal diet.
+    * **Monitor Symptoms:** Monitor condition.
+    * **Follow-up:** Re-consult if needed."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
