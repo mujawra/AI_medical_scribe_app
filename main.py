@@ -51,36 +51,64 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
     return ""
 
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    text = transcribe_audio_hf(audio_bytes)
-    if text and len(text.strip()) > 3:
-        return text.strip()
-
+    # 1. First Try Google Speech Recognition (Urdu & English) - Highly Accurate for Speech
     recognizer = sr.Recognizer()
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
-            recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            recognizer.adjust_for_ambient_noise(source, duration=0.2)
             audio_data = recognizer.record(source)
+            # Urdu Try
             text = recognizer.recognize_google(audio_data, language="ur-PK")
-            if text and len(text.strip()) > 2:
+            if text and len(text.strip()) > 1:
                 return text.strip()
     except Exception as e:
-        print(f"Urdu SpeechRecognition Warning: {e}")
+        print(f"Urdu SR Error: {e}")
 
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             audio_data = recognizer.record(source)
+            # English Try
             text = recognizer.recognize_google(audio_data, language="en-US")
-            if text and len(text.strip()) > 2:
+            if text and len(text.strip()) > 1:
                 return text.strip()
     except Exception as e:
-        print(f"English SpeechRecognition Warning: {e}")
+        print(f"English SR Error: {e}")
+
+    # 2. Backup HF Whisper API
+    text_hf = transcribe_audio_hf(audio_bytes)
+    if text_hf and len(text_hf.strip()) > 1:
+        return text_hf.strip()
 
     return ""
 
 def generate_medical_report(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
+    
+    # If audio transcription was completely empty, don't call AI LLM
+    if not transcription_text or transcription_text.strip() == "":
+        return f"""### 📋 Clinical Information
+
+* **Doctor Name:** {doctor_name}
+* **Patient Name:** {patient_name}
+* **Date:** {report_date}
+
+### 🩺 Medical Summary Report
+
+* **Chief Complaint:** Audio sound was unclear or empty.
+* **Possible Diagnosis:** Please record the audio clearly again.
+
+### 📝 Recommended Prescription & Plan
+
+* **Suggested Medication/Intervention:**
+    * No audio detected to process prescription.
+* **Advice/Next Steps:**
+    * **Rest:** Re-record speaking clearly into the microphone.
+    * **Hydration:** N/A
+    * **Monitor Symptoms:** N/A
+    * **Follow-up:** Re-submit clear audio recording."""
+
     ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
@@ -90,14 +118,13 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
     messages = [
         {
             "role": "system",
-            "content": f"""You are a strict AI Medical Scribe assisting a physician. 
-Your job is to analyze the audio transcript and extract medical details strictly related to what was spoken.
+            "content": f"""You are an expert AI Medical Scribe assisting a doctor.
+Analyze the audio transcript provided and extract accurate medical notes.
 
-STRICT LAWS:
-1. STRICT CONTEXTUAL ACCURACY: Extract ONLY the exact symptoms mentioned in the audio (e.g. if patient mentions 'thigh pain', DO NOT add fever, chest pain, or headache).
-2. DYNAMIC MATCHING: Deduce Possible Diagnosis and Suggested Medication ONLY for the spoken complaint.
-3. LANGUAGE: If spoken in Urdu/Roman Urdu, translate complaints into professional English.
-4. EXACT FORMAT MATCHING: Use the layout structure below without changing section titles.
+RULES:
+1. ONLY extract symptoms, complaints, or diseases explicitly spoken in the audio transcript.
+2. Translate Urdu/Roman Urdu spoken text into professional English.
+3. Recommend generic medication and advice tailored ONLY to the specific disease/symptom mentioned in the audio transcript. Do NOT add unrelated symptoms.
 
 Format strictly as:
 
@@ -109,22 +136,22 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Exact spoken symptoms translated to English]
-* **Possible Diagnosis:** [Clinical diagnosis strictly matching the spoken symptoms]
+* **Chief Complaint:** [Translate spoken symptoms to English accurately]
+* **Possible Diagnosis:** [Primary medical diagnosis matching the spoken complaint]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Generic Medication Name]: [Exact dosage, frequency, and duration tailored ONLY to the condition]
+    * [Generic Medication]: [Dosage and Frequency for the spoken illness]
 * **Advice/Next Steps:**
-    * **Rest:** [Targeted rest guidance for the affected body part/illness]
-    * **Hydration:** [Relevant fluid/dietary guidance]
-    * **Monitor Symptoms:** [Key warning signs relevant ONLY to this condition]
+    * **Rest:** [Specific rest guidance for this issue]
+    * **Hydration:** [Relevant dietary/fluid guidance]
+    * **Monitor Symptoms:** [Key warning signs for this issue]
     * **Follow-up:** [Timeline for re-consultation]"""
         },
         {
             "role": "user",
-            "content": f'Spoken Audio Transcript: "{transcription_text}"'
+            "content": f'Audio Transcript: "{transcription_text}"'
         }
     ]
 
@@ -137,7 +164,7 @@ Format strictly as:
         payload = {
             "model": model_id,
             "messages": messages,
-            "temperature": 0.0,
+            "temperature": 0.1,
             "max_tokens": 800
         }
         try:
@@ -161,17 +188,17 @@ Format strictly as:
 ### 🩺 Medical Summary Report
 
 * **Chief Complaint:** {transcription_text}
-* **Possible Diagnosis:** Clinical evaluation required based on symptoms provided.
+* **Possible Diagnosis:** Evaluation required based on transcript.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * Symptomatic treatment as recommended by attending physician.
+    * To be determined by physician.
 * **Advice/Next Steps:**
-    * **Rest:** Adequate physical rest as required.
-    * **Hydration:** Maintain fluid balance.
-    * **Monitor Symptoms:** Observe for persistent symptoms.
-    * **Follow-up:** Consult doctor if condition persists."""
+    * **Rest:** General rest advised.
+    * **Hydration:** Maintain hydration.
+    * **Monitor Symptoms:** Monitor condition.
+    * **Follow-up:** Re-consult if needed."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
