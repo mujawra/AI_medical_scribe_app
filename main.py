@@ -27,28 +27,47 @@ latest_data = {"transcription": "", "summary": "", "doctor": "", "patient": "", 
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
+def transcribe_audio_hf(audio_bytes: bytes) -> str:
+    """Accurate Hugging Face Whisper API transcription for mobile voice recordings"""
+    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    
+    try:
+        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=30)
+        if response.status_code == 200:
+            result = response.json()
+            return result.get("text", "").strip()
+    except Exception as e:
+        print(f"HF Whisper Error: {e}")
+    return ""
+
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
+    # First try HF Whisper API (Best for Mobile Audio)
+    text = transcribe_audio_hf(audio_bytes)
+    if text and len(text.strip()) > 2:
+        return text.strip()
+
     recognizer = sr.Recognizer()
     
-    # Try Urdu SpeechRecognition
+    # Try SpeechRecognition Urdu
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
-            recognizer.adjust_for_ambient_noise(source, duration=0.5)
+            recognizer.adjust_for_ambient_noise(source, duration=0.3)
             audio_data = recognizer.record(source)
             text = recognizer.recognize_google(audio_data, language="ur-PK")
-            if text and len(text.strip()) > 3:
+            if text and len(text.strip()) > 2:
                 return text.strip()
     except Exception as e:
         print(f"Urdu SpeechRecognition Warning: {e}")
 
-    # Try English SpeechRecognition
+    # Try SpeechRecognition English
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             audio_data = recognizer.record(source)
             text = recognizer.recognize_google(audio_data, language="en-US")
-            if text and len(text.strip()) > 3:
+            if text and len(text.strip()) > 2:
                 return text.strip()
     except Exception as e:
         print(f"English SpeechRecognition Warning: {e}")
@@ -63,18 +82,18 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
         "Content-Type": "application/json"
     }
 
+    # Strict Pic 2 Matching Prompt
     messages = [
         {
             "role": "system",
-            "content": f"""You are an expert AI Medical Scribe and Clinical Assistant.
-Analyze the audio transcript and generate a structured medical report.
+            "content": f"""You are an expert AI Medical Scribe.
+Analyze the audio transcript and generate a medical report strictly matching Pic 2 layout.
 
-INSTRUCTIONS:
-1. Extract exact complaints from the spoken audio transcript.
-2. DEDUCE the likely medical condition/disease dynamically based on the audio symptoms.
-3. RECOMMEND standard over-the-counter (OTC) medications with dosage, timing, and duration matching the detected condition (e.g., dosage frequency like 'once daily', 'every 8 hours', etc.).
-4. GENERATE specific, actionable advice/precautions tailored strictly to the condition.
-5. DO NOT print bracketed placeholder text like '[Condition-Specific Precaution 1]'. Write pure, natural English text directly under bullet points.
+DYNAMIC INSTRUCTIONS:
+1. Extract exact complaints, symptoms, and duration strictly from the audio transcript.
+2. Deduce possible diagnosis based ONLY on the spoken symptoms.
+3. Recommend standard over-the-counter medicine with dosage matching the detected condition.
+4. DO NOT use generic bracket labels like [Condition-Specific Precaution]. Strictly use the exact sub-headings as formatted below.
 
 Format strictly as:
 
@@ -86,17 +105,18 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** Write the exact patient complaints and symptoms spoken in the audio.
-* **Possible Diagnosis:** Write the clinical impression deduced from the symptoms.
+* **Chief Complaint:** [Exact complaints and feelings quoted or extracted directly from audio transcript]
+* **Possible Diagnosis:** [Clinical condition deduced dynamically from transcript]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * Write specific medication name, dosage, and intake timing matching the condition.
+    * [Medication Name (Generic Name)]: [Dosage, frequency, and duration tailored to the condition]
 * **Advice/Next Steps:**
-    * Write the primary dietary or activity precaution for this condition.
-    * Write secondary care instructions or relief methods.
-    * Write follow-up or warning sign guidance."""
+    * **Rest:** [Rest advice tailored to the audio condition]
+    * **Hydration:** [Fluid intake guidance tailored to the audio condition]
+    * **Monitor Symptoms:** [Symptom monitoring and warning sign instructions]
+    * **Follow-up:** [Follow-up appointment time frame]"""
         },
         {
             "role": "user",
@@ -113,7 +133,7 @@ Format strictly as:
         payload = {
             "model": model_id,
             "messages": messages,
-            "temperature": 0.2,
+            "temperature": 0.1,
             "max_tokens": 800
         }
         try:
@@ -137,16 +157,17 @@ Format strictly as:
 ### 🩺 Medical Summary Report
 
 * **Chief Complaint:** {transcription_text}
-* **Possible Diagnosis:** Symptomatic evaluation based on clinical audio transcript.
+* **Possible Diagnosis:** Clinical evaluation required based on audio transcript.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * Symptomatic relief medication as advised by the consulting doctor.
+    * Symptomatic treatment as recommended by physician.
 * **Advice/Next Steps:**
-    * Rest and monitor symptoms closely.
-    * Maintain adequate hydration and proper nutrition.
-    * Re-evaluate with a physician if symptoms persist."""
+    * **Rest:** Ensure adequate rest to aid recovery.
+    * **Hydration:** Maintain good daily fluid intake.
+    * **Monitor Symptoms:** Observe for persistent or worsening symptoms.
+    * **Follow-up:** Consult doctor if condition does not improve in 2-3 days."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -192,8 +213,9 @@ async def process_audio(
     
     transcribed_text = transcribe_audio_fallback(audio_content)
 
+    # Dynamic fallback: Transcribe error handling without hardcoded fever text
     if not transcribed_text:
-        transcribed_text = "Patient reported experiencing symptoms during voice consultation."
+        transcribed_text = "Audio recorded but text transcription could not clear noise. Patient requested symptom review."
 
     summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
