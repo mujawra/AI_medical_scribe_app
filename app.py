@@ -8,10 +8,6 @@ st.title("🩺 AI Medical Scribe")
 # 🔗 BACKEND URL (Ensure exact domain without trailing slash)
 # Streamlit app.py inside requests.post call
 BACKEND_URL = "https://ai-medical-scribe-app.vercel.app/process-audio/"
-
-# Send POST request
-response = requests.post(
-    BACKEND_URL,
     files={"audio": (uploaded_file.name, uploaded_file, uploaded_file.type)},
     data={"doctor_name": doctor_name, "patient_name": patient_name}
 )
