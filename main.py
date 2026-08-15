@@ -24,46 +24,56 @@ latest_data = {"transcription": "", "summary": "", "doctor": "", "patient": "", 
 @app.get("/process-audio")
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
-
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
     token = os.getenv("HF_TOKEN", "").strip()
     if not token:
         print("CRITICAL ERROR: HF_TOKEN missing!")
         return ""
 
-    # Working HF Speech Recognition Endpoints
+    # Hugging Face Whisper Endpoints
     models = [
-        "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo",
         "https://api-inference.huggingface.co/models/openai/whisper-large-v3",
+        "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo",
         "https://api-inference.huggingface.co/models/openai/whisper-small"
     ]
 
-    # Hugging Face binary raw audio headers
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "audio/wav"
+        "Content-Type": "application/octet-stream"  # Binary raw stream format for HF
     }
 
     for api_url in models:
-        try:
-            response = requests.post(api_url, headers=headers, data=audio_bytes, timeout=35)
-            print(f"HF Model: {api_url.split('/')[-1]} | Status: {response.status_code}")
-            
-            if response.status_code == 200:
-                res = response.json()
-                text = ""
-                if isinstance(res, dict) and "text" in res:
-                    text = res["text"].strip()
-                elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
-                    text = res[0]["text"].strip()
+        for attempt in range(2):  # Auto retry if model is loading
+            try:
+                response = requests.post(
+                    api_url, 
+                    headers=headers, 
+                    data=audio_bytes, 
+                    params={"wait_for_model": "true"}, 
+                    timeout=45
+                )
+                print(f"HF Model: {api_url.split('/')[-1]} | Status: {response.status_code}")
                 
-                if text:
-                    return text
-            else:
-                print(f"HF Fail Response: {response.text}")
-        except Exception as e:
-            print(f"Exception on {api_url}: {e}")
-            continue
+                if response.status_code == 200:
+                    res = response.json()
+                    text = ""
+                    if isinstance(res, dict) and "text" in res:
+                        text = res["text"].strip()
+                    elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
+                        text = res[0]["text"].strip()
+                    
+                    if text and len(text) > 2:
+                        return text
+                elif response.status_code == 503:
+                    # Model loading, wait and retry once
+                    import time
+                    time.sleep(5)
+                    continue
+                else:
+                    print(f"HF Error Output: {response.text}")
+            except Exception as e:
+                print(f"Exception on {api_url}: {e}")
+                break
 
     return ""
 
