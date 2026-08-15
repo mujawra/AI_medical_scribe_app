@@ -5,6 +5,7 @@ import os
 import requests
 import io
 import base64
+import tempfile
 import speech_recognition as sr
 from datetime import datetime
 from fpdf import FPDF
@@ -197,7 +198,16 @@ def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, rep
     safe_transcript = clean_txt_for_pdf(transcription_text)
     pdf.multi_cell(0, 5, f'"{safe_transcript}"')
     
-    return pdf.output(dest='S').encode('latin-1')
+    # Save to temp file and read bytes safely
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+        pdf.output(tmp_file.name)
+        tmp_file.seek(0)
+        pdf_bytes = tmp_file.read()
+    
+    if os.path.exists(tmp_file.name):
+        os.remove(tmp_file.name)
+        
+    return pdf_bytes
 
 @app.post("/process-audio")
 @app.post("/process-audio/")
@@ -211,46 +221,52 @@ async def process_audio(
     pat_name = patient_name.strip() if patient_name and patient_name.strip() else "Patient"
     current_date = datetime.now().strftime("%Y-%m-%d")
 
-    audio_content = await audio.read()
-    transcribed_text = transcribe_audio_fallback(audio_content)
+    try:
+        audio_content = await audio.read()
+        transcribed_text = transcribe_audio_fallback(audio_content)
 
-    if not transcribed_text:
-        transcribed_text = "Audio recorded but text transcription could not clear noise. Patient requested symptom review."
+        if not transcribed_text:
+            transcribed_text = "Audio recorded but text transcription could not clear noise. Patient requested symptom review."
 
-    summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
+        summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
-    pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
-    pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+        pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
+        pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
-    latest_data["transcription"] = transcribed_text
-    latest_data["summary"] = summary_text
-    latest_data["doctor"] = doc_name
-    latest_data["patient"] = pat_name
-    latest_data["date"] = current_date
+        latest_data["transcription"] = transcribed_text
+        latest_data["summary"] = summary_text
+        latest_data["doctor"] = doc_name
+        latest_data["patient"] = pat_name
+        latest_data["date"] = current_date
 
-    return {
-        "status": "success", 
-        "transcription": transcribed_text, 
-        "summary": summary_text,
-        "pdf_base64": pdf_base64
-    }
+        return {
+            "status": "success", 
+            "transcription": transcribed_text, 
+            "summary": summary_text,
+            "pdf_base64": pdf_base64
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
 @app.get("/download-pdf")
 @app.get("/download-pdf/")
 async def download_pdf():
-    pdf_bytes = generate_pdf_bytes(
-        latest_data["summary"], 
-        latest_data["transcription"],
-        latest_data["doctor"],
-        latest_data["patient"],
-        latest_data["date"]
-    )
-    
-    return Response(
-        content=pdf_bytes,
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": "attachment; filename=Clinical_Report.pdf",
-            "Access-Control-Expose-Headers": "Content-Disposition"
-        }
-    )
+    try:
+        pdf_bytes = generate_pdf_bytes(
+            latest_data["summary"], 
+            latest_data["transcription"],
+            latest_data["doctor"],
+            latest_data["patient"],
+            latest_data["date"]
+        )
+        
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": "attachment; filename=Clinical_Report.pdf",
+                "Access-Control-Expose-Headers": "Content-Disposition"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF download error: {str(e)}")
