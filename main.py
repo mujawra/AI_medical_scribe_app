@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 import os
 import requests
 import io
@@ -33,7 +33,7 @@ def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
-    """Accurate Hugging Face Whisper API transcription for mobile voice recordings"""
+    """Accurate Hugging Face Whisper API transcription for Urdu and English mobile voice recordings"""
     API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     
@@ -87,10 +87,13 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
         {
             "role": "system",
             "content": f"""You are an expert AI Medical Scribe.
-Analyze the audio transcript and generate a medical report strictly matching Pic 2 layout.
+Analyze the audio transcript and generate a professional clinical medical report strictly matching Pic 2 layout.
 
-DYNAMIC INSTRUCTIONS:
-1. Extract exact complaints, symptoms, and duration strictly from the audio transcript.
+LANGUAGE INSTRUCTION:
+- If the spoken audio transcript is in Urdu, Roman Urdu, or Hindi, TRANSLATE IT AND WRITE THE ENTIRE REPORT EXCLUSIVELY IN CLEAR PROFESSIONAL ENGLISH.
+
+DYNAMIC CLINICAL INSTRUCTIONS:
+1. Extract exact complaints, symptoms, and duration strictly from the audio transcript (translate Urdu to English).
 2. Deduce possible diagnosis based ONLY on the spoken symptoms.
 3. Recommend standard over-the-counter medicine with dosage matching the detected condition.
 4. DO NOT use generic bracket labels like [Condition-Specific Precaution]. Strictly use the exact sub-headings as formatted below.
@@ -105,16 +108,16 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Exact complaints and feelings quoted or extracted directly from audio transcript]
+* **Chief Complaint:** [Translate spoken complaints to English and write detailed symptoms here]
 * **Possible Diagnosis:** [Clinical condition deduced dynamically from transcript]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Medication Name (Generic Name)]: [Dosage, frequency, and duration tailored to the condition]
+    * [Medication Name (Generic Name)]: [Dosage, frequency, and duration tailored to condition]
 * **Advice/Next Steps:**
-    * **Rest:** [Rest advice tailored to the audio condition]
-    * **Hydration:** [Fluid intake guidance tailored to the audio condition]
+    * **Rest:** [Rest advice tailored to condition]
+    * **Hydration:** [Fluid intake guidance tailored to condition]
     * **Monitor Symptoms:** [Symptom monitoring and warning sign instructions]
     * **Follow-up:** [Follow-up appointment time frame]"""
         },
@@ -156,7 +159,7 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** {transcription_text}
+* **Chief Complaint:** Patient reported experiencing symptoms mentioned in the clinical consultation audio.
 * **Possible Diagnosis:** Clinical evaluation required based on audio transcript.
 
 ### 📝 Recommended Prescription & Plan
@@ -172,7 +175,7 @@ Format strictly as:
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
 
-def generate_robust_pdf(filename, summary_text, transcription_text, doc_name, pat_name, report_date):
+def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, report_date) -> bytes:
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -195,7 +198,7 @@ def generate_robust_pdf(filename, summary_text, transcription_text, doc_name, pa
     safe_transcript = clean_txt_for_pdf(transcription_text)
     pdf.multi_cell(0, 5, f'"{safe_transcript}"')
     
-    pdf.output(filename)
+    return pdf.output(dest='S').encode('latin-1')
 
 @app.post("/process-audio")
 @app.post("/process-audio/")
@@ -226,18 +229,13 @@ async def process_audio(
     return {
         "status": "success", 
         "transcription": transcribed_text, 
-        "summary": summary_text,
-        "pdf_download_url": "/download-pdf"
+        "summary": summary_text
     }
 
 @app.get("/download-pdf")
 @app.get("/download-pdf/")
 async def download_pdf():
-    pdf_filename = "/tmp/Clinical_Report.pdf"
-    
-    # Generate PDF dynamically using the latest stored session data
-    generate_robust_pdf(
-        pdf_filename, 
+    pdf_bytes = generate_pdf_bytes(
         latest_data["summary"], 
         latest_data["transcription"],
         latest_data["doctor"],
@@ -245,14 +243,11 @@ async def download_pdf():
         latest_data["date"]
     )
     
-    if os.path.exists(pdf_filename):
-        return FileResponse(
-            path=pdf_filename, 
-            filename="Clinical_Report.pdf",
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": "attachment; filename=Clinical_Report.pdf",
-                "Access-Control-Expose-Headers": "Content-Disposition"
-            }
-        )
-    raise HTTPException(status_code=500, detail="PDF generation failed")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": "attachment; filename=Clinical_Report.pdf",
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+    )
