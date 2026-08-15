@@ -1,78 +1,61 @@
 import streamlit as st
 import requests
 
-st.set_page_config(page_title="Medical Scribe AI", page_icon="🩺", layout="centered")
+st.set_page_config(page_title="AI Medical Scribe", page_icon="🩺", layout="wide")
 
-st.title("AI Medical Scribe App 🩺")
-st.write("Professional Consultation & Clinical Documentation System")
+st.title("🩺 AI Medical Scribe")
+st.write("Upload audio to generate structured clinical reports.")
 
-st.markdown("---")
-
+# 🔗 BACKEND URL (Without trailing slash)
 BACKEND_URL = "https://ai-medical-scribe-app.vercel.app"
 
-doc_input = st.text_input("Enter Doctor's Name:", value="Dr. Zainab", key="doc_name_input")
-patient_input = st.text_input("Enter Patient's Name (Type 'Auto-Detect' to let AI find it):", value="Auto-Detect", key="patient_name_input")
+col1, col2 = st.columns(2)
+with col1:
+    doctor_name = st.text_input("Enter Doctor's Name:", "Dr. Zainab")
+with col2:
+    patient_name = st.text_input("Enter Patient's Name:", "Auto-Detect")
 
-uploaded_file = st.file_uploader(
-    "Select Audio File (Supported: WAV, MP3, M4A, OGG, AAC)", 
-    type=["wav", "mp3", "m4a", "ogg", "aac"],
-    key="audio_file_uploader"
-)
+audio_file = st.file_uploader("Select Audio File (Supported: WAV, MP3, M4A, OGG)", type=["wav", "mp3", "m4a", "ogg"])
 
-if uploaded_file is not None:
-    st.audio(uploaded_file)
+if audio_file is not None:
+    st.audio(audio_file)
     
-    if st.button("Process & Generate Medical Report 🚀", use_container_width=True, key="process_btn"):
-        st.info("AI is parsing clinical data and structure formatting... Please wait.")
-        
-        st.session_state["generated"] = False
-        if "transcription" in st.session_state:
-            del st.session_state["transcription"]
-        if "summary" in st.session_state:
-            del st.session_state["summary"]
-            
-        files = {"audio": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
-        data_payload = {"doctor_name": doc_input, "patient_name": patient_input}
-        
-        try:
-            response = requests.post(f"{BACKEND_URL}/process-audio/", files=files, data=data_payload, timeout=60)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("status") == "success":
-                    st.success("Report successfully generated!")
-                    st.session_state["transcription"] = data.get("transcription")
-                    st.session_state["summary"] = data.get("summary")
-                    st.session_state["generated"] = True
-                    st.rerun()
+    if st.button("Process & Generate Medical Report 🚀", type="primary"):
+        with st.spinner("AI is parsing clinical data and structure formatting... Please wait."):
+            try:
+                # Prepare payload
+                files = {"audio": (audio_file.name, audio_file.getvalue(), audio_file.type)}
+                data_payload = {
+                    "doctor_name": doctor_name, 
+                    "patient_name": patient_name
+                }
+                
+                # Request to FastAPI Backend
+                response = requests.post(
+                    f"{BACKEND_URL}/process-audio", 
+                    files=files, 
+                    data=data_payload, 
+                    timeout=90
+                )
+                
+                if response.status_code == 200:
+                    res_data = response.json()
+                    
+                    if res_data.get("status") == "success":
+                        st.success("Report Generated Successfully!")
+                        
+                        st.subheader("🗣️ Detected Audio Transcript")
+                        st.info(res_data.get("transcription", "No text transcribed."))
+                        
+                        st.subheader("📄 Generated Clinical Report")
+                        st.markdown(res_data.get("summary", ""))
+                        
+                        pdf_download_url = f"{BACKEND_URL}/download-pdf"
+                        st.markdown(f"### [📥 Download Official PDF Report]({pdf_download_url})")
+                    else:
+                        st.error(res_data.get("message", "Audio processing failed."))
                 else:
-                    st.error(data.get("message", "Unknown error from backend."))
-            else:
-                st.error(f"Backend Server Error: {response.status_code}. Details: {response.text}")
-        except Exception as e:
-            st.error(f"Connection Error: Unable to reach FastAPI backend. Details: {e}")
-
-if st.session_state.get("generated"):
-    with st.expander("📝 View Raw Audio Transcription"):
-        st.write(st.session_state["transcription"])
-    
-    st.markdown("---")
-    st.markdown(st.session_state["summary"])
-    st.markdown("---")
-    
-    pdf_download_url = f"{BACKEND_URL}/download-pdf/"
-    try:
-        pdf_response = requests.get(pdf_download_url, timeout=30)
-        if pdf_response.status_code == 200:
-            st.download_button(
-                label="📥 Download Official Clinical Report PDF",
-                data=pdf_response.content,
-                file_name="Official_Clinical_Report.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-                key="download_pdf_btn"
-            )
-        else:
-            st.error("Backend PDF service error.")
-    except Exception:
-        st.warning("PDF Data rendering endpoint offline.")
+                    st.error(f"Backend Returned HTTP Error {response.status_code}")
+                    
+            except requests.exceptions.RequestException as e:
+                st.error("Error: Connection to FastAPI backend refused. Check if Vercel server URL is accessible.")
