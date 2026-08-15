@@ -14,7 +14,10 @@ with col1:
 with col2:
     patient_name = st.text_input("Enter Patient's Name:", "Auto-Detect")
 
-audio_file = st.file_uploader("Select Audio File (Supported: WAV, MP3, M4A, OGG)", type=["wav", "mp3", "m4a", "ogg"])
+audio_file = st.file_uploader(
+    "Select Audio File (Supported: WAV, MP3, M4A, OGG, AAC, FLAC, WMA)", 
+    type=["wav", "mp3", "m4a", "ogg", "aac", "flac", "wma"]
+)
 
 if audio_file is not None:
     st.audio(audio_file)
