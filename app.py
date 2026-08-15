@@ -6,9 +6,15 @@ st.set_page_config(page_title="AI Medical Scribe", page_icon="🩺", layout="wid
 st.title("🩺 AI Medical Scribe")
 
 # 🔗 BACKEND URL (Ensure exact domain without trailing slash)
-# Streamlit app.py inside backend call
+# Streamlit app.py inside requests.post call
 BACKEND_URL = "https://ai-medical-scribe-app.vercel.app/process-audio/"
 
+# Send POST request
+response = requests.post(
+    BACKEND_URL,
+    files={"audio": (uploaded_file.name, uploaded_file, uploaded_file.type)},
+    data={"doctor_name": doctor_name, "patient_name": patient_name}
+)
 col1, col2 = st.columns(2)
 with col1:
     doctor_name = st.text_input("Enter Doctor's Name:", "Dr. Zainab")
