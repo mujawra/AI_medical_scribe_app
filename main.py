@@ -27,31 +27,39 @@ def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
 def transcribe_audio_hf(audio_bytes: bytes, content_type: str) -> str:
-    # Official Hugging Face Inference API for Whisper Large v3
-    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3"
+    # Multiple reliable Whisper models to prevent failure
+    models = [
+        "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo",
+        "https://api-inference.huggingface.co/models/openai/whisper-large-v3",
+        "https://api-inference.huggingface.co/models/openai/whisper-small"
+    ]
     
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
         "Content-Type": content_type or "audio/wav"
     }
     
-    try:
-        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=45)
-        print(f"HF Whisper Status Code: {response.status_code}")
-        
-        if response.status_code == 200:
-            res = response.json()
-            # Handle Dictionary format: {"text": "..."}
-            if isinstance(res, dict) and "text" in res:
-                return res["text"].strip()
-            # Handle List format: [{"text": "..."}]
-            elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
-                return res[0]["text"].strip()
-        else:
-            print(f"HF Error Response: {response.text}")
-    except Exception as e:
-        print(f"Whisper API Connection Exception: {e}")
-        
+    for api_url in models:
+        try:
+            response = requests.post(api_url, headers=headers, data=audio_bytes, timeout=35)
+            print(f"HF Model ({api_url.split('/')[-1]}) Status Code: {response.status_code}")
+            
+            if response.status_code == 200:
+                res = response.json()
+                text = ""
+                if isinstance(res, dict) and "text" in res:
+                    text = res["text"].strip()
+                elif isinstance(res, list) and len(res) > 0 and "text" in res[0]:
+                    text = res[0]["text"].strip()
+                
+                if text:
+                    return text
+            else:
+                print(f"HF Model Error Response: {response.text}")
+        except Exception as e:
+            print(f"Whisper API Connection Exception for {api_url}: {e}")
+            continue
+
     return ""
 
 def generate_medical_report(transcription_text, doctor_name, patient_name):
