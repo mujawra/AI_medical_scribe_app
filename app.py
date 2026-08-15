@@ -6,7 +6,8 @@ st.set_page_config(page_title="AI Medical Scribe", page_icon="🩺", layout="wid
 st.title("🩺 AI Medical Scribe")
 
 # 🔗 BACKEND URL (Ensure exact domain without trailing slash)
-BACKEND_URL = "https://ai-medical-scribe-app.vercel.app"
+# Streamlit app.py inside backend call
+BACKEND_URL = "https://ai-medical-scribe-app.vercel.app/process-audio"
 
 col1, col2 = st.columns(2)
 with col1:
