@@ -8,7 +8,7 @@ st.write("Professional Consultation & Clinical Documentation System")
 
 st.markdown("---")
 
-# Vercel Live Backend Base URL
+# Vercel Live Backend Base URL (Ensure HTTPS)
 BACKEND_URL = "https://ai-medical-scribe-app.vercel.app"
 
 doc_input = st.text_input("Enter Doctor's Name:", value="Dr. Zainab", key="doc_name_input")
@@ -36,7 +36,9 @@ if uploaded_file is not None:
         data_payload = {"doctor_name": doc_input, "patient_name": patient_input}
         
         try:
-            response = requests.post(f"{BACKEND_URL}/process-audio", files=files, data=data_payload)
+            # Added trailing slash '/process-audio/' for Vercel route matching
+            response = requests.post(f"{BACKEND_URL}/process-audio/", files=files, data=data_payload, timeout=60)
+            
             if response.status_code == 200:
                 data = response.json()
                 if data.get("status") == "success":
@@ -48,9 +50,9 @@ if uploaded_file is not None:
                 else:
                     st.error(data.get("message", "Unknown error from backend."))
             else:
-                st.error(f"Backend Server Error: {response.status_code}. Please make sure backend is running.")
+                st.error(f"Backend Server Error: {response.status_code}. Response: {response.text}")
         except Exception as e:
-            st.error(f"Error: Connection to FastAPI backend refused. (Details: {e})")
+            st.error(f"Connection Error: Unable to reach FastAPI backend. Details: {e}")
 
 if st.session_state.get("generated"):
     with st.expander("📝 View Raw Audio Transcription"):
@@ -60,9 +62,10 @@ if st.session_state.get("generated"):
     st.markdown(st.session_state["summary"])
     st.markdown("---")
     
-    pdf_download_url = f"{BACKEND_URL}/download-pdf"
+    # Safe Lazy-Fetch PDF logic
+    pdf_download_url = f"{BACKEND_URL}/download-pdf/"
     try:
-        pdf_response = requests.get(pdf_download_url)
+        pdf_response = requests.get(pdf_download_url, timeout=30)
         if pdf_response.status_code == 200:
             st.download_button(
                 label="📥 Download Official Clinical Report PDF",
@@ -73,6 +76,6 @@ if st.session_state.get("generated"):
                 key="download_pdf_btn"
             )
         else:
-            st.error("Backend failed to render the PDF file due to data stream constraint.")
+            st.error("Backend PDF service is initializing. Please click process again.")
     except Exception:
-        st.warning("PDF Data rendering microservice endpoint offline.")
+        st.warning("PDF Data rendering endpoint offline.")
