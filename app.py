@@ -8,7 +8,6 @@ st.write("Professional Consultation & Clinical Documentation System")
 
 st.markdown("---")
 
-# Vercel Live Backend Base URL (Ensure HTTPS)
 BACKEND_URL = "https://ai-medical-scribe-app.vercel.app"
 
 doc_input = st.text_input("Enter Doctor's Name:", value="Dr. Zainab", key="doc_name_input")
@@ -36,7 +35,6 @@ if uploaded_file is not None:
         data_payload = {"doctor_name": doc_input, "patient_name": patient_input}
         
         try:
-            # Added trailing slash '/process-audio/' for Vercel route matching
             response = requests.post(f"{BACKEND_URL}/process-audio/", files=files, data=data_payload, timeout=60)
             
             if response.status_code == 200:
@@ -50,7 +48,7 @@ if uploaded_file is not None:
                 else:
                     st.error(data.get("message", "Unknown error from backend."))
             else:
-                st.error(f"Backend Server Error: {response.status_code}. Response: {response.text}")
+                st.error(f"Backend Server Error: {response.status_code}. Details: {response.text}")
         except Exception as e:
             st.error(f"Connection Error: Unable to reach FastAPI backend. Details: {e}")
 
@@ -62,7 +60,6 @@ if st.session_state.get("generated"):
     st.markdown(st.session_state["summary"])
     st.markdown("---")
     
-    # Safe Lazy-Fetch PDF logic
     pdf_download_url = f"{BACKEND_URL}/download-pdf/"
     try:
         pdf_response = requests.get(pdf_download_url, timeout=30)
@@ -76,6 +73,6 @@ if st.session_state.get("generated"):
                 key="download_pdf_btn"
             )
         else:
-            st.error("Backend PDF service is initializing. Please click process again.")
+            st.error("Backend PDF service error.")
     except Exception:
         st.warning("PDF Data rendering endpoint offline.")
