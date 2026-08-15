@@ -30,7 +30,7 @@ def home():
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
     recognizer = sr.Recognizer()
     
-    # Try SpeechRecognition
+    # Try Urdu SpeechRecognition
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
@@ -42,6 +42,7 @@ def transcribe_audio_fallback(audio_bytes: bytes) -> str:
     except Exception as e:
         print(f"Urdu SpeechRecognition Warning: {e}")
 
+    # Try English SpeechRecognition
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
@@ -62,17 +63,22 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
         "Content-Type": "application/json"
     }
 
-    # Strict Pic 2 Format Prompt
+    # Dynamic Audio-Based Deductions Prompt (No Hardcoded Diseases/Meds)
     messages = [
         {
             "role": "system",
             "content": f"""You are an expert AI Medical Scribe.
-Analyze the audio transcript and strictly generate a report matching the exact structure below.
+Analyze the provided audio transcript and generate a structured clinical report strictly matching the layout of Pic 2.
 
-CRITICAL INSTRUCTIONS:
-1. Extract exact complaints, symptoms, and duration directly from the audio transcript.
-2. DEDUCE illness and prescribe specific standard medication dosages matching the spoken symptoms (e.g., Paracetamol for fever/headache, Cough syrup for cough, Antacids for stomach issue).
-3. Always include ALL three main sections with their exact headings and emojis as shown.
+DYNAMIC CLINICAL INSTRUCTIONS:
+1. Extract exact complaints, symptoms, and timeline explicitly mentioned in the audio.
+2. Deduce the Possible Diagnosis based ONLY on the actual symptoms described in the transcript.
+3. PRECAUTIONS & ADVICE MUST BE 100% SPECIFIC TO THE DETECTED CONDITION:
+   - Do NOT use hardcoded generic advice or fixed templates.
+   - Dynamically tailor all advice, precautions, and follow-ups strictly to the exact illness/symptoms found in the transcript.
+4. For 'Suggested Medication/Intervention', list medications ONLY if explicitly spoken in the audio. If no medications were spoken, state "No specific medication mentioned in audio".
+
+Format strictly as:
 
 ### 📋 Clinical Information
 
@@ -82,17 +88,17 @@ CRITICAL INSTRUCTIONS:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Extract exact patient complaints and symptoms spoken in audio]
-* **Possible Diagnosis:** [Clinical impression deduced strictly from spoken symptoms]
+* **Chief Complaint:** [Detailed description of symptoms extracted strictly from the audio]
+* **Possible Diagnosis:** [Clinical impression deduced strictly from audio symptoms]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Specific drug name and dosage suitable for the condition, e.g., Paracetamol 500mg every 6 hours]
+    * [Explicitly mentioned medications with dosage if spoken, or "No specific medication mentioned in audio"]
 * **Advice/Next Steps:**
-    * **Rest:** [Rest advice]
-    * **Hydration:** [Fluid intake guidance]
-    * **Monitor Symptoms:** [Follow-up instructions]"""
+    * **[Condition-Specific Precaution 1]:** [Detailed precaution tailored strictly to the detected illness]
+    * **[Condition-Specific Precaution 2]:** [Second precaution tailored strictly to the detected illness]
+    * **[Condition-Specific Precaution 3]:** [Targeted follow-up instruction relevant to this condition]"""
         },
         {
             "role": "user",
@@ -109,8 +115,8 @@ CRITICAL INSTRUCTIONS:
         payload = {
             "model": model_id,
             "messages": messages,
-            "temperature": 0.2,
-            "max_tokens": 700
+            "temperature": 0.1,
+            "max_tokens": 800
         }
         try:
             res = requests.post(ROUTER_URL, headers=headers, json=payload, timeout=25)
@@ -124,7 +130,7 @@ CRITICAL INSTRUCTIONS:
             print(f"Error calling {model_id}: {err}")
             continue
 
-    # Exact Pic 2 Fallback Structure
+    # Fallback Structure
     return f"""### 📋 Clinical Information
 
 * **Doctor Name:** {doctor_name}
@@ -134,16 +140,15 @@ CRITICAL INSTRUCTIONS:
 ### 🩺 Medical Summary Report
 
 * **Chief Complaint:** {transcription_text}
-* **Possible Diagnosis:** Symptomatic evaluation required based on clinical history.
+* **Possible Diagnosis:** Clinical evaluation required based on spoken symptoms.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * Consult treating physician for appropriate medicine and dosage.
+    * No specific medication mentioned in audio.
 * **Advice/Next Steps:**
-    * **Rest:** Ensure adequate bed rest.
-    * **Hydration:** Maintain good fluid intake.
-    * **Monitor Symptoms:** Re-evaluate if symptoms persist or worsen."""
+    * **Targeted Care:** Follow condition-specific care guidance as recommended by physician.
+    * **Monitoring:** Observe symptoms closely and seek re-evaluation if condition worsens."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -190,7 +195,7 @@ async def process_audio(
     transcribed_text = transcribe_audio_fallback(audio_content)
 
     if not transcribed_text:
-        transcribed_text = "Patient reported experiencing fever, headache, and body aches for the last 2 days."
+        transcribed_text = "Patient reported symptoms during voice consultation."
 
     summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
