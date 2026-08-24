@@ -8,7 +8,6 @@ import base64
 import tempfile
 from datetime import datetime
 from fpdf import FPDF
-from pydub import AudioSegment
 
 app = FastAPI()
 
@@ -21,6 +20,7 @@ app.add_middleware(
 )
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")  # Groq API key (Free & handles mobile audio directly)
 
 latest_data = {
     "transcription": "", 
@@ -30,63 +30,40 @@ latest_data = {
     "date": datetime.now().strftime("%Y-%m-%d")
 }
 
-def convert_to_wav(audio_bytes: bytes, filename: str) -> bytes:
-    """Converts mobile audio formats (.aac, .m4a, etc.) to PCM WAV in memory"""
-    ext = os.path.splitext(filename)[1].lower().replace('.', '')
-    if not ext:
-        ext = "aac"
+def transcribe_audio_mobile_friendly(audio_bytes: bytes, filename: str) -> str:
+    """Direct transcription using Groq Whisper API (native support for .aac, .m4a, .wav)"""
     
-    # Return as-is if already clean wav
-    if ext == "wav":
-        return audio_bytes
-
-    try:
-        audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format=ext)
-        out_io = io.BytesIO()
-        audio.export(out_io, format="wav")
-        return out_io.getvalue()
-    except Exception as e:
-        print(f"Audio conversion fallback (pydub): {e}")
-        return audio_bytes
-
-def transcribe_audio_robust(audio_bytes: bytes, filename: str) -> str:
-    """Robust transcription that handles mobile .aac/.m4a formats"""
-    # 1. Convert any mobile audio to standard WAV first
-    clean_wav_bytes = convert_to_wav(audio_bytes, filename)
-    
-    # 2. Try Whisper Large v3
-    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "audio/wav"
-    }
-    
-    try:
-        res = requests.post(API_URL, headers=headers, data=clean_wav_bytes, timeout=35)
-        if res.status_code == 200:
-            result = res.json()
-            if isinstance(result, dict) and "text" in result:
-                text = result.get("text", "").strip()
+    # 1. Groq Whisper API (Best for Mobile Audio Formats)
+    if GROQ_API_KEY:
+        try:
+            url = "https://api.groq.com/openai/v1/audio/transcriptions"
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+            files = {"file": (filename, audio_bytes, "audio/aac")}
+            data = {"model": "whisper-large-v3", "language": "ur"}
+            
+            res = requests.post(url, headers=headers, files=files, data=data, timeout=30)
+            if res.status_code == 200:
+                text = res.json().get("text", "").strip()
                 if text:
                     return text
-    except Exception as e:
-        print(f"Whisper API error: {e}")
+        except Exception as e:
+            print(f"Groq API Error: {e}")
 
-    # 3. Fallback AssemblyAI Direct API
+    # 2. AssemblyAI Fallback Direct Binary Upload
     try:
         headers_aai = {'authorization': '8f27807a0c8b417bbd222e4d03e91d60'}
-        upload_res = requests.post('https://api.assemblyai.com/v2/upload', headers=headers_aai, data=clean_wav_bytes)
+        upload_res = requests.post('https://api.assemblyai.com/v2/upload', headers=headers_aai, data=audio_bytes)
         if upload_res.status_code == 200:
             audio_url = upload_res.json().get('upload_url')
             tx_res = requests.post(
                 'https://api.assemblyai.com/v2/transcript', 
-                json={"audio_url": audio_url, "language_detection": True}, 
+                json={"audio_url": audio_url}, 
                 headers=headers_aai
             )
             if tx_res.status_code == 200:
                 tx_id = tx_res.json().get('id')
                 import time
-                for _ in range(12):
+                for _ in range(15):
                     poll = requests.get(f'https://api.assemblyai.com/v2/transcript/{tx_id}', headers=headers_aai)
                     p_json = poll.json()
                     if p_json.get('status') == 'completed':
@@ -95,13 +72,33 @@ def transcribe_audio_robust(audio_bytes: bytes, filename: str) -> str:
                         break
                     time.sleep(1)
     except Exception as e:
-        print(f"AssemblyAI fallback error: {e}")
+        print(f"AssemblyAI Error: {e}")
 
     return ""
 
 def generate_medical_report(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
     
+    if not transcription_text:
+        return f"""### 📋 Clinical Information
+
+* **Doctor Name:** {doctor_name}
+* **Patient Name:** {patient_name}
+* **Date:** {report_date}
+
+### 🩺 Medical Summary Report
+
+* **Chief Complaint:** Could not transcribe audio recording. Please speak clearly and re-record.
+* **Possible Diagnosis:** Pending audio transcription.
+
+### 📝 Recommended Prescription & Plan
+
+* **Suggested Medication/Intervention:**
+    * N/A - Require clear symptom voice recording.
+* **Advice/Next Steps (Hadaiyat):**
+    * **Rest:** General rest.
+    * **Follow-up:** Please record symptoms again."""
+
     ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
@@ -113,10 +110,9 @@ Analyze the audio transcript provided (spoken in Urdu, Roman Urdu, or English).
 
 INSTRUCTIONS:
 1. Extract clinical symptoms from transcript.
-2. If audio is unclear/empty, provide a default general assessment without refusal messages.
-3. Detect condition and specify generic medicines with dosages.
-4. Provide instructions (Hadaiyat).
-5. Output in clear English.
+2. Detect condition and specify generic medicines with dosages based strictly on symptoms.
+3. Provide instructions (Hadaiyat).
+4. Output strictly in English.
 
 Format strictly as:
 
@@ -143,7 +139,7 @@ Format strictly as:
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f'Audio Transcript: "{transcription_text if transcription_text else "Patient presented with general symptoms."}"'}
+        {"role": "user", "content": f'Audio Transcript: "{transcription_text}"'}
     ]
 
     models = ["Qwen/Qwen2.5-7B-Instruct", "meta-llama/Llama-3.1-8B-Instruct"]
@@ -163,26 +159,7 @@ Format strictly as:
         except Exception:
             continue
 
-    return f"""### 📋 Clinical Information
-
-* **Doctor Name:** {doctor_name}
-* **Patient Name:** {patient_name}
-* **Date:** {report_date}
-
-### 🩺 Medical Summary Report
-
-* **Chief Complaint:** {transcription_text if transcription_text else "General clinical evaluation."}
-* **Possible Diagnosis:** Symptomatic assessment required.
-
-### 📝 Recommended Prescription & Plan
-
-* **Suggested Medication/Intervention:**
-    * Consultation required before prescribing medication.
-* **Advice/Next Steps (Hadaiyat):**
-    * **Rest:** Rest advised.
-    * **Hydration & Diet:** Increase fluid intake.
-    * **Monitor Symptoms:** Track symptoms closely.
-    * **Follow-up:** Consult physician."""
+    return "Failed to generate AI report from transcript."
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -239,13 +216,13 @@ async def process_audio(
         audio_content = await audio.read()
         filename = audio.filename if audio.filename else "audio.aac"
         
-        # 1. Transcribe with mobile audio conversion
-        transcribed_text = transcribe_audio_robust(audio_content, filename)
+        # 1. Transcribe Audio
+        transcribed_text = transcribe_audio_mobile_friendly(audio_content, filename)
         
         # 2. Generate Report
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
-        # 3. PDF Base64
+        # 3. PDF
         pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
