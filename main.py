@@ -32,75 +32,50 @@ latest_data = {
 
 @app.get("/")
 def home():
-    return {"status": "AI Medical Scribe API is Active"}
+    return {"status": "AI Medical Scribe API Active"}
 
-def transcribe_with_assemblyai(audio_bytes: bytes) -> str:
-    """Processes mobile (.aac, .m4a) and PC (.wav, .webm) audio files"""
+def transcribe_with_groq_or_hf(audio_bytes: bytes, filename: str) -> str:
+    """Robust transcription for mobile (.aac, .m4a) and PC formats"""
+    # 1. Hugging Face Whisper Large v3
+    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "audio/aac" if filename.endswith(".aac") else "audio/wav"
+    }
+    
     try:
-        headers = {'authorization': '8f27807a0c8b417bbd222e4d03e91d60'}
-        upload_response = requests.post('https://api.assemblyai.com/v2/upload', headers=headers, data=audio_bytes)
-        
-        if upload_response.status_code == 200:
-            audio_url = upload_response.json().get('upload_url')
-            json_payload = { "audio_url": audio_url, "language_detection": True }
-            tx_response = requests.post('https://api.assemblyai.com/v2/transcript', json=json_payload, headers=headers)
-            
-            if tx_response.status_code == 200:
-                tx_id = tx_response.json().get('id')
+        res = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=40)
+        if res.status_code == 200:
+            result = res.json()
+            if isinstance(result, dict) and "text" in result:
+                return result.get("text", "").strip()
+    except Exception as e:
+        print(f"Whisper Error: {e}")
+
+    # 2. Backup AssemblyAI Direct Binary Stream
+    try:
+        headers_aai = {'authorization': '8f27807a0c8b417bbd222e4d03e91d60'}
+        upload_res = requests.post('https://api.assemblyai.com/v2/upload', headers=headers_aai, data=audio_bytes)
+        if upload_res.status_code == 200:
+            audio_url = upload_res.json().get('upload_url')
+            tx_res = requests.post(
+                'https://api.assemblyai.com/v2/transcript', 
+                json={"audio_url": audio_url, "language_detection": True}, 
+                headers=headers_aai
+            )
+            if tx_res.status_code == 200:
+                tx_id = tx_res.json().get('id')
                 import time
-                for _ in range(15):
-                    polling_res = requests.get(f'https://api.assemblyai.com/v2/transcript/{tx_id}', headers=headers)
-                    res_json = polling_res.json()
-                    if res_json.get('status') == 'completed':
-                        return res_json.get('text', '').strip()
-                    elif res_json.get('status') == 'error':
+                for _ in range(12):
+                    poll = requests.get(f'https://api.assemblyai.com/v2/transcript/{tx_id}', headers=headers_aai)
+                    p_json = poll.json()
+                    if p_json.get('status') == 'completed':
+                        return p_json.get('text', '').strip()
+                    elif p_json.get('status') == 'error':
                         break
                     time.sleep(1)
     except Exception as e:
-        print(f"AssemblyAI Exception: {e}")
-    return ""
-
-def transcribe_audio_hf(audio_bytes: bytes, filename: str) -> str:
-    """Fallback using Whisper Large v3 Inference Endpoint"""
-    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
-    ext = filename.split(".")[-1].lower() if "." in filename else "wav"
-    content_type_map = {
-        "aac": "audio/aac", "m4a": "audio/m4a", "mp3": "audio/mpeg",
-        "ogg": "audio/ogg", "wav": "audio/wav", "webm": "audio/webm"
-    }
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": content_type_map.get(ext, "audio/wav")
-    }
-    try:
-        res = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
-        if res.status_code == 200:
-            result = res.json()
-            return result.get("text", "").strip()
-    except Exception as e:
-        print(f"HF Error: {e}")
-    return ""
-
-def process_transcription(audio_bytes: bytes, filename: str) -> str:
-    # 1. Primary Speech-to-Text
-    text = transcribe_with_assemblyai(audio_bytes)
-    if text and len(text.strip()) > 1:
-        return text.strip()
-
-    # 2. HF Whisper Fallback
-    text_hf = transcribe_audio_hf(audio_bytes, filename)
-    if text_hf and len(text_hf.strip()) > 1:
-        return text_hf.strip()
-
-    # 3. SpeechRecognition Engine
-    recognizer = sr.Recognizer()
-    try:
-        audio_file = io.BytesIO(audio_bytes)
-        with sr.AudioFile(audio_file) as source:
-            audio_data = recognizer.record(source)
-            return recognizer.recognize_google(audio_data, language="ur-PK")
-    except Exception:
-        pass
+        print(f"AssemblyAI Error: {e}")
 
     return ""
 
@@ -117,10 +92,10 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
 Analyze the audio transcript provided (which may be in Urdu, Roman Urdu, or English).
 
 LAWS:
-1. Grounding: Detect the condition ONLY from the symptoms spoken in the audio transcript (e.g., if chest infection symptoms like cough/fever/wheezing are spoken, diagnose accordingly).
-2. Pure Dynamic Prescriptions: Recommend generic medications, dosages, and instructions STRICTLY tailored to the detected disease/condition.
-3. Unclear/Empty Input Handling: If NO medical symptoms are detected in the transcript, state "No specific clinical symptoms mentioned" and DO NOT prescribe any medications.
-4. Translation: Output the final medical notes strictly in professional English.
+1. Detect condition strictly from symptoms spoken in the transcript.
+2. Recommend generic medications, dosages, and instructions corresponding ONLY to detected symptoms.
+3. If input is completely empty or missing symptoms, state "No symptoms recorded" without prescribing specific medications.
+4. Output language must be clear, professional English.
 
 Strict Output Format:
 
@@ -132,49 +107,41 @@ Strict Output Format:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Accurate translation/summary of spoken symptoms]
-* **Possible Diagnosis:** [Primary condition detected strictly from symptoms]
+* **Chief Complaint:** [Spoken symptoms translated into English]
+* **Possible Diagnosis:** [Condition detected strictly from symptoms]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Generic Medication Name & Dosage]: [Usage instructions relevant to the detected condition]
+    * [Generic Medication & Dosage]: [Usage instructions]
 * **Advice/Next Steps (Hadaiyat):**
-    * **Rest:** [Targeted recovery advice]
-    * **Hydration & Diet:** [Dietary and fluid management guidance]
-    * **Monitor Symptoms:** [Key warning signs to watch for]
-    * **Follow-up:** [Timeline for re-consultation]"""
+    * **Rest:** [Targeted advice]
+    * **Hydration & Diet:** [Guidance]
+    * **Monitor Symptoms:** [Warning signs]
+    * **Follow-up:** [Timeline]"""
 
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": f'Audio Transcript: "{transcription_text}"'}
     ]
 
-    models_to_try = [
-        "Qwen/Qwen2.5-7B-Instruct",
-        "meta-llama/Llama-3.1-8B-Instruct"
-    ]
+    models = ["Qwen/Qwen2.5-7B-Instruct", "meta-llama/Llama-3.1-8B-Instruct"]
 
-    for model_id in models_to_try:
-        payload = {
-            "model": model_id,
-            "messages": messages,
-            "temperature": 0.1,
-            "max_tokens": 800
-        }
+    for model_id in models:
         try:
-            res = requests.post(ROUTER_URL, headers=headers, json=payload, timeout=25)
+            res = requests.post(
+                ROUTER_URL, 
+                headers=headers, 
+                json={"model": model_id, "messages": messages, "temperature": 0.1, "max_tokens": 800}, 
+                timeout=25
+            )
             if res.status_code == 200:
                 result = res.json()
                 if "choices" in result and len(result["choices"]) > 0:
-                    output = result["choices"][0]["message"]["content"].strip()
-                    if output:
-                        return output
-        except Exception as err:
-            print(f"LLM Error ({model_id}): {err}")
+                    return result["choices"][0]["message"]["content"].strip()
+        except Exception:
             continue
 
-    # Pure Generic Fallback (NO HARDCODED MEDICINES)
     return f"""### 📋 Clinical Information
 
 * **Doctor Name:** {doctor_name}
@@ -183,18 +150,18 @@ Strict Output Format:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** {transcription_text if transcription_text else "Audio recording uploaded."}
-* **Possible Diagnosis:** Pending detailed physician examination.
+* **Chief Complaint:** {transcription_text if transcription_text else "Patient audio recording provided."}
+* **Possible Diagnosis:** Clinical evaluation required.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * Clinical consultation required before prescribing medication.
+    * Consultation required before prescribing medications.
 * **Advice/Next Steps (Hadaiyat):**
-    * **Rest:** Rest advised as necessary.
-    * **Hydration & Diet:** Stay hydrated and consume light nutritious food.
-    * **Monitor Symptoms:** Keep track of fever, cough, or pain.
-    * **Follow-up:** Consult a medical specialist."""
+    * **Rest:** Physical rest advised.
+    * **Hydration & Diet:** Increase fluid intake.
+    * **Monitor Symptoms:** Track fever/cough.
+    * **Follow-up:** Consult physician."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -212,16 +179,14 @@ def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, rep
     
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(45, 55, 72)
-    safe_summary = clean_txt_for_pdf(summary_text)
-    pdf.multi_cell(0, 7, safe_summary.strip())
+    pdf.multi_cell(0, 7, clean_txt_for_pdf(summary_text).strip())
     
     pdf.ln(10)
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_text_color(113, 128, 150)
     pdf.cell(0, 6, "Detected Audio Transcript:", ln=True)
     pdf.set_font("Helvetica", "I", 9)
-    safe_transcript = clean_txt_for_pdf(transcription_text)
-    pdf.multi_cell(0, 5, f'"{safe_transcript}"')
+    pdf.multi_cell(0, 5, f'"{clean_txt_for_pdf(transcription_text)}"')
     
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
         pdf.output(tmp_file.name)
@@ -247,15 +212,11 @@ async def process_audio(
 
     try:
         audio_content = await audio.read()
-        filename = audio.filename if audio.filename else "audio.wav"
+        filename = audio.filename if audio.filename else "audio.aac"
         
-        # 1. Transcribe Audio
-        transcribed_text = process_transcription(audio_content, filename)
-        
-        # 2. Extract Medical details purely based on transcript
+        transcribed_text = transcribe_with_groq_or_hf(audio_content, filename)
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
-        # 3. Create PDF
         pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
@@ -285,7 +246,6 @@ async def download_pdf():
             latest_data["patient"],
             latest_data["date"]
         )
-        
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
