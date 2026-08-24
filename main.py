@@ -3,11 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 import os
 import requests
+import io
 import base64
 import tempfile
+import speech_recognition as sr
 from datetime import datetime
 from fpdf import FPDF
-from huggingface_hub import InferenceClient
 
 app = FastAPI()
 
@@ -21,12 +22,9 @@ app.add_middleware(
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 
-# Initialize HF Inference Client directly with your Token
-client = InferenceClient(api_key=HF_TOKEN)
-
 latest_data = {
-    "transcription": "", 
-    "summary": "", 
+    "transcription": "No audio transcribed yet.", 
+    "summary": "No report generated yet.", 
     "doctor": "Dr. Zainab", 
     "patient": "Patient", 
     "date": datetime.now().strftime("%Y-%m-%d")
@@ -34,36 +32,62 @@ latest_data = {
 
 @app.get("/")
 def home():
-    return {"status": "FastAPI Medical Scribe Engine Live"}
+    return {"status": "FastAPI Backend is Live on Vercel!"}
 
-def transcribe_recording(audio_bytes: bytes) -> str:
-    """Uses HF Inference Client for native audio stream transcription"""
+def transcribe_audio_hf(audio_bytes: bytes) -> str:
+    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     try:
-        # Automatic whisper inference using HF Client SDK
-        response = client.automatic_speech_recognition(
-            audio=audio_bytes,
-            model="openai/whisper-large-v3-turbo"
-        )
-        if isinstance(response, dict):
-            text = response.get("text", "").strip()
-        else:
-            text = str(response).strip()
-            
-        # Hallucination Filter
-        hallucinations = ["thank you for watching", "subtitles by", "amara.org"]
-        if not any(h in text.lower() for h in hallucinations):
-            return text
-
+        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
+        if response.status_code == 200:
+            result = response.json()
+            extracted_text = result.get("text", "").strip()
+            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org"]
+            if any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4:
+                return ""
+            return extracted_text
     except Exception as e:
-        print(f"HF Audio Transcription Error: {e}")
+        print(f"HF Whisper Error: {e}")
+    return ""
+
+def transcribe_audio_fallback(audio_bytes: bytes) -> str:
+    # 1. First Try Google Speech Recognition (Urdu & English) - Highly Accurate for Speech
+    recognizer = sr.Recognizer()
+    try:
+        audio_file = io.BytesIO(audio_bytes)
+        with sr.AudioFile(audio_file) as source:
+            recognizer.adjust_for_ambient_noise(source, duration=0.2)
+            audio_data = recognizer.record(source)
+            # Urdu Try
+            text = recognizer.recognize_google(audio_data, language="ur-PK")
+            if text and len(text.strip()) > 1:
+                return text.strip()
+    except Exception as e:
+        print(f"Urdu SR Error: {e}")
+
+    try:
+        audio_file = io.BytesIO(audio_bytes)
+        with sr.AudioFile(audio_file) as source:
+            audio_data = recognizer.record(source)
+            # English Try
+            text = recognizer.recognize_google(audio_data, language="en-US")
+            if text and len(text.strip()) > 1:
+                return text.strip()
+    except Exception as e:
+        print(f"English SR Error: {e}")
+
+    # 2. Backup HF Whisper API
+    text_hf = transcribe_audio_hf(audio_bytes)
+    if text_hf and len(text_hf.strip()) > 1:
+        return text_hf.strip()
 
     return ""
 
 def generate_medical_report(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
     
-    # Strictly handle empty or unreadable audio
-    if not transcription_text or len(transcription_text.strip()) < 3:
+    # If audio transcription was completely empty, don't call AI LLM
+    if not transcription_text or transcription_text.strip() == "":
         return f"""### 📋 Clinical Information
 
 * **Doctor Name:** {doctor_name}
@@ -72,29 +96,37 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** Could not extract clear speech from audio.
-* **Possible Diagnosis:** Pending clear voice input.
+* **Chief Complaint:** Audio sound was unclear or empty.
+* **Possible Diagnosis:** Please record the audio clearly again.
 
-### 📝 Recommended Prescription & Plan
+### 📝 Recommended Plan
 
-* **Suggested Medication/Intervention:**
-    * No audio detected to prescribe medication.
+* **Medication:** Not applicable — no audio detected to process.
 * **Advice/Next Steps:**
-    * **Rest:** Please re-record speaking clearly into the mic.
+    * **Rest:** Re-record speaking clearly into the microphone.
     * **Hydration:** N/A
-    * **Monitor Symptoms:** Re-record audio.
-    * **Follow-up:** Re-submit recording."""
+    * **Monitor Symptoms:** N/A
+    * **Follow-up:** Re-submit clear audio recording."""
 
-    system_prompt = f"""You are an expert AI Medical Scribe assisting a physician.
-You will receive a transcript of a spoken patient-doctor dialogue (spoken in Urdu, Roman Urdu, or English).
+    ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json"
+    }
 
-YOUR TASKS:
-1. Extract exact symptoms strictly mentioned in the transcript.
-2. Translate Urdu/Roman Urdu terms into clinical English terms.
-3. Diagnose the condition based ONLY on the spoken content.
-4. Dynamically generate appropriate medical prescriptions (generic drugs with dosages) and advice for the diagnosed condition.
+    messages = [
+        {
+            "role": "system",
+            "content": f"""You are an AI medical scribe assisting a doctor by turning a spoken consultation into structured clinical notes.
 
-OUTPUT FORMAT:
+RULES (STRICT):
+1. ONLY extract symptoms, complaints, history, or observations explicitly spoken in the audio transcript. Do not invent or assume anything not said.
+2. Translate Urdu/Roman Urdu spoken text into professional English.
+3. You are a SCRIBE, not a prescriber. NEVER name a specific medicine, drug, brand, or dosage (e.g. do not write Panadol, Brufen, Ibuprofen, Paracetamol, amoxicillin, mg amounts, etc.), under any circumstances, even if the patient mentions a drug they are already taking (in that case, just record it as reported history, in the Chief Complaint/History section — do not repeat it in the plan or recommend it).
+4. Do NOT suggest a diagnosis-specific treatment or intervention. Leave the actual medication and treatment decision entirely to the doctor.
+5. Only general, non-drug self-care advice is allowed (e.g. rest, fluids, when to seek urgent care) — never medication names or doses.
+
+Format strictly as:
 
 ### 📋 Clinical Information
 
@@ -104,37 +136,67 @@ OUTPUT FORMAT:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Translated spoken symptoms]
-* **Possible Diagnosis:** [Primary Diagnosis]
+* **Chief Complaint:** [Translate spoken symptoms/history to English accurately, including any medicines the patient says they already took, reported as history only]
+* **Possible Diagnosis:** [Primary differential(s) suggested by the spoken complaint, phrased as "to be confirmed by physician"]
 
-### 📝 Recommended Prescription & Plan
+### 📝 Recommended Plan
 
-* **Suggested Medication/Intervention:**
-    * [Dynamically suggested generic medicine & dosage based on diagnosis]
+* **Medication:** To be prescribed by the doctor after clinical evaluation. (Do not name any medicine or dosage here.)
 * **Advice/Next Steps:**
-    * **Rest:** [Relevant advice]
-    * **Hydration:** [Relevant fluid/diet advice]
-    * **Monitor Symptoms:** [Key warning signs]
-    * **Follow-up:** [Timeline for re-consultation]"""
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f'Audio Transcript: "{transcription_text}"'}
+    * **Rest:** [General, non-drug guidance for this issue]
+    * **Hydration:** [Relevant general fluid/dietary guidance, no drug names]
+    * **Monitor Symptoms:** [Key warning signs for this issue]
+    * **Follow-up:** [Timeline for re-consultation with the doctor]"""
+        },
+        {
+            "role": "user",
+            "content": f'Audio Transcript: "{transcription_text}"'
+        }
     ]
 
-    try:
-        # High quality open-source model through HF Router API
-        completion = client.chat.completions.create(
-            model="Qwen/Qwen2.5-7B-Instruct",
-            messages=messages,
-            max_tokens=800,
-            temperature=0.1
-        )
-        return completion.choices[0].message.content.strip()
-    except Exception as err:
-        print(f"AI Report Generation Error: {err}")
+    models_to_try = [
+        "Qwen/Qwen2.5-7B-Instruct",
+        "meta-llama/Llama-3.1-8B-Instruct"
+    ]
 
-    return "Failed to process AI clinical response."
+    for model_id in models_to_try:
+        payload = {
+            "model": model_id,
+            "messages": messages,
+            "temperature": 0.1,
+            "max_tokens": 800
+        }
+        try:
+            res = requests.post(ROUTER_URL, headers=headers, json=payload, timeout=25)
+            if res.status_code == 200:
+                result = res.json()
+                if "choices" in result and len(result["choices"]) > 0:
+                    output = result["choices"][0]["message"]["content"].strip()
+                    if output:
+                        return output
+        except Exception as err:
+            print(f"Error calling {model_id}: {err}")
+            continue
+
+    return f"""### 📋 Clinical Information
+
+* **Doctor Name:** {doctor_name}
+* **Patient Name:** {patient_name}
+* **Date:** {report_date}
+
+### 🩺 Medical Summary Report
+
+* **Chief Complaint:** {transcription_text}
+* **Possible Diagnosis:** Evaluation required based on transcript.
+
+### 📝 Recommended Plan
+
+* **Medication:** To be determined by physician after evaluation.
+* **Advice/Next Steps:**
+    * **Rest:** General rest advised.
+    * **Hydration:** Maintain hydration.
+    * **Monitor Symptoms:** Monitor condition.
+    * **Follow-up:** Re-consult if needed."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -149,17 +211,18 @@ def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, rep
     pdf.set_text_color(255, 255, 255)
     pdf.cell(0, 10, "CLINICAL CONVERSATION REPORT", ln=True, align="C")
     pdf.ln(15)
-    
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(45, 55, 72)
-    pdf.multi_cell(0, 7, clean_txt_for_pdf(summary_text).strip())
+    safe_summary = clean_txt_for_pdf(summary_text)
+    pdf.multi_cell(0, 7, safe_summary.strip())
     
     pdf.ln(10)
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_text_color(113, 128, 150)
     pdf.cell(0, 6, "Detected Audio Transcript:", ln=True)
     pdf.set_font("Helvetica", "I", 9)
-    pdf.multi_cell(0, 5, f'"{clean_txt_for_pdf(transcription_text)}"')
+    safe_transcript = clean_txt_for_pdf(transcription_text)
+    pdf.multi_cell(0, 5, f'"{safe_transcript}"')
     
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
         pdf.output(tmp_file.name)
@@ -185,11 +248,11 @@ async def process_audio(
 
     try:
         audio_content = await audio.read()
-        
-        # 1. Transcribe direct audio stream via HF Hub Client SDK
-        transcribed_text = transcribe_recording(audio_content)
+        transcribed_text = transcribe_audio_fallback(audio_content)
 
-        # 2. Send transcript directly to LLM for report/prescription generation
+        if not transcribed_text:
+            transcribed_text = "Audio recorded but transcription was unclear. Patient requested clinical review."
+
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
         pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
@@ -221,6 +284,7 @@ async def download_pdf():
             latest_data["patient"],
             latest_data["date"]
         )
+        
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",
