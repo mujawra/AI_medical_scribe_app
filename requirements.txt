@@ -5,3 +5,5 @@ fpdf2
 python-multipart
 SpeechRecognition
 pydub
+huggingface_hub
+python-multipart
