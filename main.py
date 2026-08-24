@@ -23,8 +23,8 @@ app.add_middleware(
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 
 latest_data = {
-    "transcription": "No audio transcribed yet.", 
-    "summary": "No report generated yet.", 
+    "transcription": "", 
+    "summary": "", 
     "doctor": "Dr. Zainab", 
     "patient": "Patient", 
     "date": datetime.now().strftime("%Y-%m-%d")
@@ -32,70 +32,71 @@ latest_data = {
 
 @app.get("/")
 def home():
-    return {"status": "AI Medical Scribe API is Running Live!"}
+    return {"status": "AI Medical Scribe Backend Active"}
 
-def transcribe_audio_hf(audio_bytes: bytes, filename: str) -> str:
-    """Uses Hugging Face Whisper Large v3 directly with dynamic MIME types for Mobile & PC audio formats."""
-    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
-    
-    ext = filename.split(".")[-1].lower() if "." in filename else "wav"
-    content_type_map = {
-        "aac": "audio/aac",
-        "m4a": "audio/m4a",
-        "mp3": "audio/mpeg",
-        "ogg": "audio/ogg",
-        "wav": "audio/wav",
-        "webm": "audio/webm",
-        "flac": "audio/flac"
-    }
-    content_type = content_type_map.get(ext, "audio/wav")
-
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": content_type
-    }
-
+def transcribe_with_assemblyai(audio_bytes: bytes) -> str:
     try:
-        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=45)
-        if response.status_code == 200:
-            result = response.json()
-            extracted_text = result.get("text", "").strip()
+        headers = {'authorization': '8f27807a0c8b417bbd222e4d03e91d60'}
+        upload_response = requests.post('https://api.assemblyai.com/v2/upload', headers=headers, data=audio_bytes)
+        
+        if upload_response.status_code == 200:
+            audio_url = upload_response.json().get('upload_url')
+            json_payload = { "audio_url": audio_url, "language_detection": True }
+            tx_response = requests.post('https://api.assemblyai.com/v2/transcript', json=json_payload, headers=headers)
             
-            # Filter common Whisper hallucinations/noise
-            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org", "you", "Bye.", "Thank you.", "MB3"]
-            if extracted_text in hallucinations or (any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4):
-                return ""
-            return extracted_text
+            if tx_response.status_code == 200:
+                tx_id = tx_response.json().get('id')
+                import time
+                for _ in range(15):
+                    polling_res = requests.get(f'https://api.assemblyai.com/v2/transcript/{tx_id}', headers=headers)
+                    res_json = polling_res.json()
+                    if res_json.get('status') == 'completed':
+                        return res_json.get('text', '').strip()
+                    elif res_json.get('status') == 'error':
+                        break
+                    time.sleep(1)
     except Exception as e:
-        print(f"HF Whisper Exception: {e}")
+        print(f"AssemblyAI Exception: {e}")
     return ""
 
-def transcribe_audio_fallback(audio_bytes: bytes, filename: str) -> str:
-    # 1. Primary: Dynamic HF Whisper API (Works on Mobile M4A/AAC & Laptop WAV/WebM)
-    hf_text = transcribe_audio_hf(audio_bytes, filename)
-    if hf_text and len(hf_text.strip()) > 1:
-        return hf_text.strip()
+def transcribe_audio_hf(audio_bytes: bytes, filename: str) -> str:
+    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+    ext = filename.split(".")[-1].lower() if "." in filename else "wav"
+    content_type_map = {
+        "aac": "audio/aac", "m4a": "audio/m4a", "mp3": "audio/mpeg",
+        "ogg": "audio/ogg", "wav": "audio/wav", "webm": "audio/webm"
+    }
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": content_type_map.get(ext, "audio/wav")
+    }
+    try:
+        res = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
+        if res.status_code == 200:
+            result = res.json()
+            return result.get("text", "").strip()
+    except Exception as e:
+        print(f"HF Error: {e}")
+    return ""
 
-    # 2. Secondary: Google Speech Recognition for Native PCM/WAV
+def process_transcription(audio_bytes: bytes, filename: str) -> str:
+    # 1. Primary Transcriber
+    text = transcribe_with_assemblyai(audio_bytes)
+    if text and len(text.strip()) > 1:
+        return text.strip()
+
+    # 2. HF Whisper Fallback
+    text_hf = transcribe_audio_hf(audio_bytes, filename)
+    if text_hf and len(text_hf.strip()) > 1:
+        return text_hf.strip()
+
+    # 3. SpeechRecognition
     recognizer = sr.Recognizer()
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
-            recognizer.adjust_for_ambient_noise(source, duration=0.2)
             audio_data = recognizer.record(source)
-            text = recognizer.recognize_google(audio_data, language="ur-PK")
-            if text and len(text.strip()) > 1:
-                return text.strip()
-    except Exception:
-        pass
-
-    try:
-        audio_file = io.BytesIO(audio_bytes)
-        with sr.AudioFile(audio_file) as source:
-            audio_data = recognizer.record(source)
-            text = recognizer.recognize_google(audio_data, language="en-US")
-            if text and len(text.strip()) > 1:
-                return text.strip()
+            return recognizer.recognize_google(audio_data, language="ur-PK")
     except Exception:
         pass
 
@@ -104,46 +105,22 @@ def transcribe_audio_fallback(audio_bytes: bytes, filename: str) -> str:
 def generate_medical_report(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
     
-    if not transcription_text or transcription_text.strip() == "":
-        return f"""### 📋 Clinical Information
-
-* **Doctor Name:** {doctor_name}
-* **Patient Name:** {patient_name}
-* **Date:** {report_date}
-
-### 🩺 Medical Summary Report
-
-* **Chief Complaint:** Speech was unclear or silence detected in audio.
-* **Possible Diagnosis:** Cannot extract symptoms from the given recording.
-
-### 📝 Recommended Prescription & Plan
-
-* **Suggested Medication/Intervention:**
-    * Please re-record audio clearly speaking symptoms (e.g. fever, headache, cough).
-* **Advice/Next Steps:**
-    * **Rest:** Hold phone or microphone closer while speaking.
-    * **Hydration:** N/A
-    * **Monitor Symptoms:** N/A
-    * **Follow-up:** Re-upload recording."""
-
     ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
         "Content-Type": "application/json"
     }
 
-    messages = [
-        {
-            "role": "system",
-            "content": f"""You are an expert AI Medical Scribe assisting a physician.
-Analyze the provided transcript (which may be in Urdu, Roman Urdu, or English) and convert it into a formal, English Clinical Summary.
+    system_prompt = f"""You are an expert AI Medical Scribe assisting a doctor.
+Analyze the provided transcript (which may be in Urdu, Roman Urdu, or English).
 
-STRICT INSTRUCTIONS:
-1. Grounding: Extract ONLY symptoms, pain levels, and complaints stated in the transcript. Never hallucinate extra conditions.
-2. Translation: Always output the final Medical Summary and Prescription in English.
-3. Tailored Medications: Recommend appropriate standard OTC medications, dosage guidelines, and patient advice relevant ONLY to the identified illness.
+LAWS:
+1. Grounding: Extract ONLY clinical complaints and symptoms explicitly mentioned in the transcript.
+2. Translation: Translate spoken Urdu symptoms into formal English.
+3. Relevant Treatment: ONLY suggest generic medications or care plans that directly correspond to the explicitly mentioned symptoms in the audio.
+4. Unclear Audio Handling: If the transcript is empty or no valid medical complaints are detected, state "No distinct clinical symptoms detected" under Chief Complaint and DO NOT prescribe specific medications.
 
-Formatting Layout:
+Format strictly as:
 
 ### 📋 Clinical Information
 
@@ -153,23 +130,22 @@ Formatting Layout:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Accurate English translation of spoken complaints/symptoms]
-* **Possible Diagnosis:** [Primary clinical diagnosis matching the symptoms]
+* **Chief Complaint:** [Extracted spoken symptoms in English]
+* **Possible Diagnosis:** [Primary condition matching ONLY the spoken symptoms]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Medication Name]: [Dosage & Frequency based on symptoms]
+    * [Generic Medication tailored ONLY to detected symptom]: [Dosage & Frequency]
 * **Advice/Next Steps:**
-    * **Rest:** [Targeted advice for recovery]
-    * **Hydration:** [Relevant dietary/fluid intake advice]
-    * **Monitor Symptoms:** [Warning signs to watch for]
-    * **Follow-up:** [Recommended timeframe for next visit]"""
-        },
-        {
-            "role": "user",
-            "content": f'Audio Transcript: "{transcription_text}"'
-        }
+    * **Rest:** [Targeted advice]
+    * **Hydration:** [Relevant advice]
+    * **Monitor Symptoms:** [Warning signs]
+    * **Follow-up:** [Timeline]"""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f'Audio Transcript: "{transcription_text}"'}
     ]
 
     models_to_try = [
@@ -193,9 +169,10 @@ Formatting Layout:
                     if output:
                         return output
         except Exception as err:
-            print(f"Error calling {model_id}: {err}")
+            print(f"LLM Error ({model_id}): {err}")
             continue
 
+    # Clean fallback without fake medicines
     return f"""### 📋 Clinical Information
 
 * **Doctor Name:** {doctor_name}
@@ -204,18 +181,18 @@ Formatting Layout:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** {transcription_text}
-* **Possible Diagnosis:** Clinical evaluation required based on transcript.
+* **Chief Complaint:** {transcription_text if transcription_text else "No speech detected in audio"}
+* **Possible Diagnosis:** Pending physician clinical evaluation.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * Symptomatic treatment as recommended by physician.
+    * Clinical assessment required before issuing prescription.
 * **Advice/Next Steps:**
     * **Rest:** General rest advised.
-    * **Hydration:** Maintain hydration.
+    * **Hydration:** Maintain fluid intake.
     * **Monitor Symptoms:** Monitor condition.
-    * **Follow-up:** Re-consult if needed."""
+    * **Follow-up:** Consultation with physician."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -270,14 +247,13 @@ async def process_audio(
         audio_content = await audio.read()
         filename = audio.filename if audio.filename else "audio.wav"
         
-        transcribed_text = transcribe_audio_fallback(audio_content, filename)
-
+        transcribed_text = process_transcription(audio_content, filename)
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
         pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
-        latest_data["transcription"] = transcribed_text if transcribed_text else "No speech detected"
+        latest_data["transcription"] = transcribed_text
         latest_data["summary"] = summary_text
         latest_data["doctor"] = doc_name
         latest_data["patient"] = pat_name
@@ -285,7 +261,7 @@ async def process_audio(
 
         return {
             "status": "success", 
-            "transcription": latest_data["transcription"], 
+            "transcription": transcribed_text, 
             "summary": summary_text,
             "pdf_base64": pdf_base64
         }
