@@ -32,27 +32,48 @@ latest_data = {
 
 @app.get("/")
 def home():
-    return {"status": "AI Medical Scribe API Active"}
+    return {"status": "AI Medical Scribe API is Running"}
 
-def transcribe_with_groq_or_hf(audio_bytes: bytes, filename: str) -> str:
-    """Robust transcription for mobile (.aac, .m4a) and PC formats"""
-    # 1. Hugging Face Whisper Large v3
-    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "audio/aac" if filename.endswith(".aac") else "audio/wav"
-    }
+def transcribe_audio_robust(audio_bytes: bytes, filename: str) -> str:
+    """Robust Multilingual Transcription for Urdu & English Audio"""
     
+    # 1. Try SpeechRecognition with Google Speech Engine
     try:
-        res = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=40)
+        recognizer = sr.Recognizer()
+        # Save bytes to temporary file for format conversion
+        ext = os.path.splitext(filename)[1] if filename else ".wav"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_audio:
+            temp_audio.write(audio_bytes)
+            temp_path = temp_audio.name
+
+        with sr.AudioFile(temp_path) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data, language="ur-PK")
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            if text and len(text.strip()) > 1:
+                return text.strip()
+    except Exception as e:
+        print(f"SpeechRecognition Fallback: {e}")
+
+    # 2. Try Hugging Face Open AI Whisper
+    try:
+        API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+        headers = {
+            "Authorization": f"Bearer {HF_TOKEN}",
+            "Content-Type": "audio/aac" if filename.endswith(".aac") else "audio/wav"
+        }
+        res = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=30)
         if res.status_code == 200:
             result = res.json()
             if isinstance(result, dict) and "text" in result:
-                return result.get("text", "").strip()
+                text = result.get("text", "").strip()
+                if text:
+                    return text
     except Exception as e:
-        print(f"Whisper Error: {e}")
+        print(f"HF Whisper Error: {e}")
 
-    # 2. Backup AssemblyAI Direct Binary Stream
+    # 3. Direct AssemblyAI Engine
     try:
         headers_aai = {'authorization': '8f27807a0c8b417bbd222e4d03e91d60'}
         upload_res = requests.post('https://api.assemblyai.com/v2/upload', headers=headers_aai, data=audio_bytes)
@@ -66,7 +87,7 @@ def transcribe_with_groq_or_hf(audio_bytes: bytes, filename: str) -> str:
             if tx_res.status_code == 200:
                 tx_id = tx_res.json().get('id')
                 import time
-                for _ in range(12):
+                for _ in range(10):
                     poll = requests.get(f'https://api.assemblyai.com/v2/transcript/{tx_id}', headers=headers_aai)
                     p_json = poll.json()
                     if p_json.get('status') == 'completed':
@@ -75,7 +96,7 @@ def transcribe_with_groq_or_hf(audio_bytes: bytes, filename: str) -> str:
                         break
                     time.sleep(1)
     except Exception as e:
-        print(f"AssemblyAI Error: {e}")
+        print(f"AssemblyAI Exception: {e}")
 
     return ""
 
@@ -91,13 +112,14 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
     system_prompt = f"""You are an expert AI Clinical Scribe.
 Analyze the audio transcript provided (which may be in Urdu, Roman Urdu, or English).
 
-LAWS:
-1. Detect condition strictly from symptoms spoken in the transcript.
-2. Recommend generic medications, dosages, and instructions corresponding ONLY to detected symptoms.
-3. If input is completely empty or missing symptoms, state "No symptoms recorded" without prescribing specific medications.
-4. Output language must be clear, professional English.
+TASKS:
+1. Extract all clinical complaints and symptoms spoken in the audio transcript.
+2. Identify the specific medical disease/condition that matches those symptoms.
+3. Suggest appropriate generic medicines, dosage, and frequency specifically for that condition.
+4. Provide detailed medical instructions and precautions (Hadaiyat).
+5. Output everything strictly in professional English.
 
-Strict Output Format:
+Format strictly as:
 
 ### 📋 Clinical Information
 
@@ -107,18 +129,18 @@ Strict Output Format:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Spoken symptoms translated into English]
-* **Possible Diagnosis:** [Condition detected strictly from symptoms]
+* **Chief Complaint:** [Translate spoken Urdu symptoms into clear English]
+* **Possible Diagnosis:** [Disease/condition detected from symptoms]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
     * [Generic Medication & Dosage]: [Usage instructions]
 * **Advice/Next Steps (Hadaiyat):**
-    * **Rest:** [Targeted advice]
+    * **Rest:** [Targeted recovery advice]
     * **Hydration & Diet:** [Guidance]
-    * **Monitor Symptoms:** [Warning signs]
-    * **Follow-up:** [Timeline]"""
+    * **Monitor Symptoms:** [Warning signs to watch]
+    * **Follow-up:** [Timeline for re-consultation]"""
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -132,7 +154,7 @@ Strict Output Format:
             res = requests.post(
                 ROUTER_URL, 
                 headers=headers, 
-                json={"model": model_id, "messages": messages, "temperature": 0.1, "max_tokens": 800}, 
+                json={"model": model_id, "messages": messages, "temperature": 0.2, "max_tokens": 800}, 
                 timeout=25
             )
             if res.status_code == 200:
@@ -150,18 +172,18 @@ Strict Output Format:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** {transcription_text if transcription_text else "Patient audio recording provided."}
-* **Possible Diagnosis:** Clinical evaluation required.
+* **Chief Complaint:** {transcription_text if transcription_text else "Patient audio uploaded."}
+* **Possible Diagnosis:** Clinical examination required.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * Consultation required before prescribing medications.
+    * Consultation required for tailored prescription.
 * **Advice/Next Steps (Hadaiyat):**
-    * **Rest:** Physical rest advised.
-    * **Hydration & Diet:** Increase fluid intake.
-    * **Monitor Symptoms:** Track fever/cough.
-    * **Follow-up:** Consult physician."""
+    * **Rest:** Adequate rest recommended.
+    * **Hydration & Diet:** Maintain fluid intake.
+    * **Monitor Symptoms:** Track symptoms closely.
+    * **Follow-up:** Visit clinic if symptoms persist."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -212,11 +234,15 @@ async def process_audio(
 
     try:
         audio_content = await audio.read()
-        filename = audio.filename if audio.filename else "audio.aac"
+        filename = audio.filename if audio.filename else "audio.wav"
         
-        transcribed_text = transcribe_with_groq_or_hf(audio_content, filename)
+        # 1. Transcribe Audio
+        transcribed_text = transcribe_audio_robust(audio_content, filename)
+        
+        # 2. Generate Medical Diagnosis, Medicines & Hadaiyat
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
+        # 3. Create PDF
         pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
