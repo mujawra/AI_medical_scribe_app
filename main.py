@@ -6,7 +6,6 @@ import requests
 import io
 import base64
 import tempfile
-import speech_recognition as sr
 from datetime import datetime
 from fpdf import FPDF
 
@@ -34,46 +33,36 @@ latest_data = {
 def home():
     return {"status": "AI Medical Scribe API is Running"}
 
-def transcribe_audio_robust(audio_bytes: bytes, filename: str) -> str:
-    """Robust Multilingual Transcription for Urdu & English Audio"""
+def transcribe_whisper_hf(audio_bytes: bytes, filename: str) -> str:
+    """Whisper API Transcription with fallback mechanisms"""
+    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
     
-    # 1. Try SpeechRecognition with Google Speech Engine
-    try:
-        recognizer = sr.Recognizer()
-        # Save bytes to temporary file for format conversion
-        ext = os.path.splitext(filename)[1] if filename else ".wav"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_audio:
-            temp_audio.write(audio_bytes)
-            temp_path = temp_audio.name
+    # Explicit content-type mapping for Mobile
+    content_type = "audio/wav"
+    if filename.endswith(".aac"):
+        content_type = "audio/aac"
+    elif filename.endswith(".m4a"):
+        content_type = "audio/m4a"
+    elif filename.endswith(".mp3"):
+        content_type = "audio/mpeg"
+    elif filename.endswith(".webm"):
+        content_type = "audio/webm"
 
-        with sr.AudioFile(temp_path) as source:
-            audio_data = recognizer.record(source)
-            text = recognizer.recognize_google(audio_data, language="ur-PK")
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            if text and len(text.strip()) > 1:
-                return text.strip()
-    except Exception as e:
-        print(f"SpeechRecognition Fallback: {e}")
-
-    # 2. Try Hugging Face Open AI Whisper
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": content_type
+    }
+    
     try:
-        API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
-        headers = {
-            "Authorization": f"Bearer {HF_TOKEN}",
-            "Content-Type": "audio/aac" if filename.endswith(".aac") else "audio/wav"
-        }
-        res = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=30)
+        res = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
         if res.status_code == 200:
             result = res.json()
             if isinstance(result, dict) and "text" in result:
-                text = result.get("text", "").strip()
-                if text:
-                    return text
+                return result.get("text", "").strip()
     except Exception as e:
-        print(f"HF Whisper Error: {e}")
+        print(f"Whisper Primary Error: {e}")
 
-    # 3. Direct AssemblyAI Engine
+    # Fallback to AssemblyAI endpoint
     try:
         headers_aai = {'authorization': '8f27807a0c8b417bbd222e4d03e91d60'}
         upload_res = requests.post('https://api.assemblyai.com/v2/upload', headers=headers_aai, data=audio_bytes)
@@ -96,7 +85,7 @@ def transcribe_audio_robust(audio_bytes: bytes, filename: str) -> str:
                         break
                     time.sleep(1)
     except Exception as e:
-        print(f"AssemblyAI Exception: {e}")
+        print(f"AssemblyAI Fallback Error: {e}")
 
     return ""
 
@@ -110,14 +99,14 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
     }
 
     system_prompt = f"""You are an expert AI Clinical Scribe.
-Analyze the audio transcript provided (which may be in Urdu, Roman Urdu, or English).
+Analyze the audio transcript provided (spoken in Urdu, Roman Urdu, or English).
 
-TASKS:
-1. Extract all clinical complaints and symptoms spoken in the audio transcript.
-2. Identify the specific medical disease/condition that matches those symptoms.
-3. Suggest appropriate generic medicines, dosage, and frequency specifically for that condition.
-4. Provide detailed medical instructions and precautions (Hadaiyat).
-5. Output everything strictly in professional English.
+INSTRUCTIONS:
+1. Identify clinical symptoms spoken in the transcript.
+2. Detect the exact disease/condition based strictly on the symptoms.
+3. Output relevant generic medications, dosage, and usage instructions corresponding ONLY to the detected disease.
+4. Output patient precautions & instructions (Hadaiyat).
+5. Format output strictly in English.
 
 Format strictly as:
 
@@ -129,7 +118,7 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Translate spoken Urdu symptoms into clear English]
+* **Chief Complaint:** [Translate spoken symptoms into clear English]
 * **Possible Diagnosis:** [Disease/condition detected from symptoms]
 
 ### 📝 Recommended Prescription & Plan
@@ -137,10 +126,10 @@ Format strictly as:
 * **Suggested Medication/Intervention:**
     * [Generic Medication & Dosage]: [Usage instructions]
 * **Advice/Next Steps (Hadaiyat):**
-    * **Rest:** [Targeted recovery advice]
+    * **Rest:** [Targeted advice]
     * **Hydration & Diet:** [Guidance]
-    * **Monitor Symptoms:** [Warning signs to watch]
-    * **Follow-up:** [Timeline for re-consultation]"""
+    * **Monitor Symptoms:** [Warning signs]
+    * **Follow-up:** [Timeline]"""
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -172,18 +161,18 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** {transcription_text if transcription_text else "Patient audio uploaded."}
-* **Possible Diagnosis:** Clinical examination required.
+* **Chief Complaint:** {transcription_text if transcription_text else "Patient voice recorded."}
+* **Possible Diagnosis:** Clinical evaluation required.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
     * Consultation required for tailored prescription.
 * **Advice/Next Steps (Hadaiyat):**
-    * **Rest:** Adequate rest recommended.
-    * **Hydration & Diet:** Maintain fluid intake.
+    * **Rest:** Rest advised.
+    * **Hydration & Diet:** Increase fluid intake.
     * **Monitor Symptoms:** Track symptoms closely.
-    * **Follow-up:** Visit clinic if symptoms persist."""
+    * **Follow-up:** Consult physician."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -236,13 +225,13 @@ async def process_audio(
         audio_content = await audio.read()
         filename = audio.filename if audio.filename else "audio.wav"
         
-        # 1. Transcribe Audio
-        transcribed_text = transcribe_audio_robust(audio_content, filename)
+        # Transcribe Audio
+        transcribed_text = transcribe_whisper_hf(audio_content, filename)
         
-        # 2. Generate Medical Diagnosis, Medicines & Hadaiyat
+        # Generate Medical Diagnosis, Medicines & Hadaiyat
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
-        # 3. Create PDF
+        # Create PDF
         pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
