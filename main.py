@@ -9,6 +9,7 @@ import tempfile
 import speech_recognition as sr
 from datetime import datetime
 from fpdf import FPDF
+from pydub import AudioSegment
 
 app = FastAPI()
 
@@ -34,6 +35,19 @@ latest_data = {
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
+def convert_to_wav(audio_bytes: bytes) -> bytes:
+    """Converts input audio bytes (webm, mp3, ogg, m4a) into clean 16kHz WAV bytes."""
+    try:
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        audio = audio.set_channels(1).set_frame_rate(16000)
+        wav_io = io.BytesIO()
+        audio.export(wav_io, format="wav")
+        wav_io.seek(0)
+        return wav_io.read()
+    except Exception as e:
+        print(f"Audio conversion error: {e}")
+        return audio_bytes
+
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
     API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
@@ -51,33 +65,35 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
     return ""
 
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    # 1. First Try Google Speech Recognition (Urdu & English) - Highly Accurate for Speech
+    clean_wav_bytes = convert_to_wav(audio_bytes)
+    
     recognizer = sr.Recognizer()
+    
+    # 1. Try Google Urdu Speech Recognition
     try:
-        audio_file = io.BytesIO(audio_bytes)
+        audio_file = io.BytesIO(clean_wav_bytes)
         with sr.AudioFile(audio_file) as source:
             recognizer.adjust_for_ambient_noise(source, duration=0.2)
             audio_data = recognizer.record(source)
-            # Urdu Try
             text = recognizer.recognize_google(audio_data, language="ur-PK")
             if text and len(text.strip()) > 1:
                 return text.strip()
     except Exception as e:
         print(f"Urdu SR Error: {e}")
 
+    # 2. Try Google English Speech Recognition
     try:
-        audio_file = io.BytesIO(audio_bytes)
+        audio_file = io.BytesIO(clean_wav_bytes)
         with sr.AudioFile(audio_file) as source:
             audio_data = recognizer.record(source)
-            # English Try
             text = recognizer.recognize_google(audio_data, language="en-US")
             if text and len(text.strip()) > 1:
                 return text.strip()
     except Exception as e:
         print(f"English SR Error: {e}")
 
-    # 2. Backup HF Whisper API
-    text_hf = transcribe_audio_hf(audio_bytes)
+    # 3. Backup HF Whisper API
+    text_hf = transcribe_audio_hf(clean_wav_bytes)
     if text_hf and len(text_hf.strip()) > 1:
         return text_hf.strip()
 
@@ -86,7 +102,6 @@ def transcribe_audio_fallback(audio_bytes: bytes) -> str:
 def generate_medical_report(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
     
-    # If audio transcription was completely empty, don't call AI LLM
     if not transcription_text or transcription_text.strip() == "":
         return f"""### 📋 Clinical Information
 
@@ -96,18 +111,18 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** Audio sound was unclear or empty.
-* **Possible Diagnosis:** Please record the audio clearly again.
+* **Chief Complaint:** Audio sound was unclear or silent.
+* **Possible Diagnosis:** Could not detect symptoms from audio.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * No audio detected to process prescription.
+    * Please record clear audio again.
 * **Advice/Next Steps:**
-    * **Rest:** Re-record speaking clearly into the microphone.
+    * **Rest:** Speak close to the microphone.
     * **Hydration:** N/A
     * **Monitor Symptoms:** N/A
-    * **Follow-up:** Re-submit clear audio recording."""
+    * **Follow-up:** Re-upload audio."""
 
     ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
     headers = {
@@ -121,10 +136,10 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
             "content": f"""You are an expert AI Medical Scribe assisting a doctor.
 Analyze the audio transcript provided and extract accurate medical notes.
 
-RULES:
-1. ONLY extract symptoms, complaints, or diseases explicitly spoken in the audio transcript.
-2. Translate Urdu/Roman Urdu spoken text into professional English.
-3. Recommend generic medication and advice tailored ONLY to the specific disease/symptom mentioned in the audio transcript. Do NOT add unrelated symptoms.
+STRICT LAWS:
+1. Grounding: Extract ONLY symptoms, medical terms, and complaints explicitly spoken in the audio transcript. DO NOT invent or add unrelated conditions.
+2. Dynamic Medication: Suggest OTC medications and care plans strictly tailored to the detected disease/symptom.
+3. Language: If spoken in Urdu or Roman Urdu, translate complaints into clear English script.
 
 Format strictly as:
 
@@ -137,12 +152,12 @@ Format strictly as:
 ### 🩺 Medical Summary Report
 
 * **Chief Complaint:** [Translate spoken symptoms to English accurately]
-* **Possible Diagnosis:** [Primary medical diagnosis matching the spoken complaint]
+* **Possible Diagnosis:** [Primary medical diagnosis matching ONLY the spoken complaint]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Generic Medication]: [Dosage and Frequency for the spoken illness]
+    * [Generic Medication]: [Dosage and Frequency tailored specifically to the spoken illness]
 * **Advice/Next Steps:**
     * **Rest:** [Specific rest guidance for this issue]
     * **Hydration:** [Relevant dietary/fluid guidance]
@@ -164,7 +179,7 @@ Format strictly as:
         payload = {
             "model": model_id,
             "messages": messages,
-            "temperature": 0.1,
+            "temperature": 0.0,
             "max_tokens": 800
         }
         try:
@@ -188,12 +203,12 @@ Format strictly as:
 ### 🩺 Medical Summary Report
 
 * **Chief Complaint:** {transcription_text}
-* **Possible Diagnosis:** Evaluation required based on transcript.
+* **Possible Diagnosis:** Clinical evaluation required based on transcript.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * To be determined by physician.
+    * Symptomatic treatment as recommended by physician.
 * **Advice/Next Steps:**
     * **Rest:** General rest advised.
     * **Hydration:** Maintain hydration.
@@ -252,15 +267,12 @@ async def process_audio(
         audio_content = await audio.read()
         transcribed_text = transcribe_audio_fallback(audio_content)
 
-        if not transcribed_text:
-            transcribed_text = "Audio recorded but transcription was unclear. Patient requested clinical review."
-
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
         pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
-        latest_data["transcription"] = transcribed_text
+        latest_data["transcription"] = transcribed_text if transcribed_text else "No speech detected"
         latest_data["summary"] = summary_text
         latest_data["doctor"] = doc_name
         latest_data["patient"] = pat_name
@@ -268,7 +280,7 @@ async def process_audio(
 
         return {
             "status": "success", 
-            "transcription": transcribed_text, 
+            "transcription": latest_data["transcription"], 
             "summary": summary_text,
             "pdf_base64": pdf_base64
         }
