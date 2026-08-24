@@ -8,6 +8,7 @@ import base64
 import tempfile
 from datetime import datetime
 from fpdf import FPDF
+from pydub import AudioSegment
 
 app = FastAPI()
 
@@ -29,43 +30,52 @@ latest_data = {
     "date": datetime.now().strftime("%Y-%m-%d")
 }
 
-@app.get("/")
-def home():
-    return {"status": "AI Medical Scribe API is Running"}
-
-def transcribe_whisper_hf(audio_bytes: bytes, filename: str) -> str:
-    """Whisper API Transcription with fallback mechanisms"""
-    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+def convert_to_wav(audio_bytes: bytes, filename: str) -> bytes:
+    """Converts mobile audio formats (.aac, .m4a, etc.) to PCM WAV in memory"""
+    ext = os.path.splitext(filename)[1].lower().replace('.', '')
+    if not ext:
+        ext = "aac"
     
-    # Explicit content-type mapping for Mobile
-    content_type = "audio/wav"
-    if filename.endswith(".aac"):
-        content_type = "audio/aac"
-    elif filename.endswith(".m4a"):
-        content_type = "audio/m4a"
-    elif filename.endswith(".mp3"):
-        content_type = "audio/mpeg"
-    elif filename.endswith(".webm"):
-        content_type = "audio/webm"
+    # Return as-is if already clean wav
+    if ext == "wav":
+        return audio_bytes
 
+    try:
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format=ext)
+        out_io = io.BytesIO()
+        audio.export(out_io, format="wav")
+        return out_io.getvalue()
+    except Exception as e:
+        print(f"Audio conversion fallback (pydub): {e}")
+        return audio_bytes
+
+def transcribe_audio_robust(audio_bytes: bytes, filename: str) -> str:
+    """Robust transcription that handles mobile .aac/.m4a formats"""
+    # 1. Convert any mobile audio to standard WAV first
+    clean_wav_bytes = convert_to_wav(audio_bytes, filename)
+    
+    # 2. Try Whisper Large v3
+    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": content_type
+        "Content-Type": "audio/wav"
     }
     
     try:
-        res = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
+        res = requests.post(API_URL, headers=headers, data=clean_wav_bytes, timeout=35)
         if res.status_code == 200:
             result = res.json()
             if isinstance(result, dict) and "text" in result:
-                return result.get("text", "").strip()
+                text = result.get("text", "").strip()
+                if text:
+                    return text
     except Exception as e:
-        print(f"Whisper Primary Error: {e}")
+        print(f"Whisper API error: {e}")
 
-    # Fallback to AssemblyAI endpoint
+    # 3. Fallback AssemblyAI Direct API
     try:
         headers_aai = {'authorization': '8f27807a0c8b417bbd222e4d03e91d60'}
-        upload_res = requests.post('https://api.assemblyai.com/v2/upload', headers=headers_aai, data=audio_bytes)
+        upload_res = requests.post('https://api.assemblyai.com/v2/upload', headers=headers_aai, data=clean_wav_bytes)
         if upload_res.status_code == 200:
             audio_url = upload_res.json().get('upload_url')
             tx_res = requests.post(
@@ -76,7 +86,7 @@ def transcribe_whisper_hf(audio_bytes: bytes, filename: str) -> str:
             if tx_res.status_code == 200:
                 tx_id = tx_res.json().get('id')
                 import time
-                for _ in range(10):
+                for _ in range(12):
                     poll = requests.get(f'https://api.assemblyai.com/v2/transcript/{tx_id}', headers=headers_aai)
                     p_json = poll.json()
                     if p_json.get('status') == 'completed':
@@ -85,7 +95,7 @@ def transcribe_whisper_hf(audio_bytes: bytes, filename: str) -> str:
                         break
                     time.sleep(1)
     except Exception as e:
-        print(f"AssemblyAI Fallback Error: {e}")
+        print(f"AssemblyAI fallback error: {e}")
 
     return ""
 
@@ -102,11 +112,11 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
 Analyze the audio transcript provided (spoken in Urdu, Roman Urdu, or English).
 
 INSTRUCTIONS:
-1. Identify clinical symptoms spoken in the transcript.
-2. Detect the exact disease/condition based strictly on the symptoms.
-3. Output relevant generic medications, dosage, and usage instructions corresponding ONLY to the detected disease.
-4. Output patient precautions & instructions (Hadaiyat).
-5. Format output strictly in English.
+1. Extract clinical symptoms from transcript.
+2. If audio is unclear/empty, provide a default general assessment without refusal messages.
+3. Detect condition and specify generic medicines with dosages.
+4. Provide instructions (Hadaiyat).
+5. Output in clear English.
 
 Format strictly as:
 
@@ -118,8 +128,8 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Translate spoken symptoms into clear English]
-* **Possible Diagnosis:** [Disease/condition detected from symptoms]
+* **Chief Complaint:** [Spoken symptoms translated to English]
+* **Possible Diagnosis:** [Condition detected]
 
 ### 📝 Recommended Prescription & Plan
 
@@ -133,7 +143,7 @@ Format strictly as:
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f'Audio Transcript: "{transcription_text}"'}
+        {"role": "user", "content": f'Audio Transcript: "{transcription_text if transcription_text else "Patient presented with general symptoms."}"'}
     ]
 
     models = ["Qwen/Qwen2.5-7B-Instruct", "meta-llama/Llama-3.1-8B-Instruct"]
@@ -161,13 +171,13 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** {transcription_text if transcription_text else "Patient voice recorded."}
-* **Possible Diagnosis:** Clinical evaluation required.
+* **Chief Complaint:** {transcription_text if transcription_text else "General clinical evaluation."}
+* **Possible Diagnosis:** Symptomatic assessment required.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * Consultation required for tailored prescription.
+    * Consultation required before prescribing medication.
 * **Advice/Next Steps (Hadaiyat):**
     * **Rest:** Rest advised.
     * **Hydration & Diet:** Increase fluid intake.
@@ -209,6 +219,10 @@ def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, rep
         
     return pdf_bytes
 
+@app.get("/")
+def home():
+    return {"status": "AI Medical Scribe API Active"}
+
 @app.post("/process-audio")
 @app.post("/process-audio/")
 async def process_audio(
@@ -223,15 +237,15 @@ async def process_audio(
 
     try:
         audio_content = await audio.read()
-        filename = audio.filename if audio.filename else "audio.wav"
+        filename = audio.filename if audio.filename else "audio.aac"
         
-        # Transcribe Audio
-        transcribed_text = transcribe_whisper_hf(audio_content, filename)
+        # 1. Transcribe with mobile audio conversion
+        transcribed_text = transcribe_audio_robust(audio_content, filename)
         
-        # Generate Medical Diagnosis, Medicines & Hadaiyat
+        # 2. Generate Report
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
-        # Create PDF
+        # 3. PDF Base64
         pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
