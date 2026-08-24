@@ -7,6 +7,7 @@ import base64
 import tempfile
 from datetime import datetime
 from fpdf import FPDF
+from huggingface_hub import InferenceClient
 
 app = FastAPI()
 
@@ -19,7 +20,9 @@ app.add_middleware(
 )
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+
+# Initialize HF Inference Client directly with your Token
+client = InferenceClient(api_key=HF_TOKEN)
 
 latest_data = {
     "transcription": "", 
@@ -33,47 +36,33 @@ latest_data = {
 def home():
     return {"status": "FastAPI Medical Scribe Engine Live"}
 
-def transcribe_recording(audio_bytes: bytes, filename: str) -> str:
-    """Accurately convert Urdu/Roman-Urdu/English mobile audio to text"""
-    
-    # 1. Best Choice: Groq API (High Speed & Handles Mobile formats directly)
-    if GROQ_API_KEY:
-        try:
-            url = "https://api.groq.com/openai/v1/audio/transcriptions"
-            headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-            files = {"file": (filename or "audio.m4a", audio_bytes)}
-            data = {"model": "whisper-large-v3"}
-            
-            res = requests.post(url, headers=headers, files=files, data=data, timeout=30)
-            if res.status_code == 200:
-                text = res.json().get("text", "").strip()
-                if text:
-                    return text
-        except Exception as e:
-            print(f"Groq Transcription Error: {e}")
-
-    # 2. Backup: HuggingFace Inference API
+def transcribe_recording(audio_bytes: bytes) -> str:
+    """Uses HF Inference Client for native audio stream transcription"""
     try:
-        API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        res = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
-        if res.status_code == 200:
-            result = res.json()
-            if isinstance(result, dict) and "text" in result:
-                text = result.get("text", "").strip()
-                # Remove common Whisper silent hallucinations
-                hallucinations = ["thank you for watching", "subtitles by", "amara.org", "you"]
-                if not any(h in text.lower() for h in hallucinations):
-                    return text
+        # Automatic whisper inference using HF Client SDK
+        response = client.automatic_speech_recognition(
+            audio=audio_bytes,
+            model="openai/whisper-large-v3-turbo"
+        )
+        if isinstance(response, dict):
+            text = response.get("text", "").strip()
+        else:
+            text = str(response).strip()
+            
+        # Hallucination Filter
+        hallucinations = ["thank you for watching", "subtitles by", "amara.org"]
+        if not any(h in text.lower() for h in hallucinations):
+            return text
+
     except Exception as e:
-        print(f"HF Whisper Error: {e}")
+        print(f"HF Audio Transcription Error: {e}")
 
     return ""
 
 def generate_medical_report(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
     
-    # Strictly handle empty or unreadable audio without fake hardcoded reports
+    # Strictly handle empty or unreadable audio
     if not transcription_text or len(transcription_text.strip()) < 3:
         return f"""### 📋 Clinical Information
 
@@ -96,23 +85,16 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
     * **Monitor Symptoms:** Re-record audio.
     * **Follow-up:** Re-submit recording."""
 
-    ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    # Pure AI instruction prompt without hardcoded drug names
     system_prompt = f"""You are an expert AI Medical Scribe assisting a physician.
 You will receive a transcript of a spoken patient-doctor dialogue (spoken in Urdu, Roman Urdu, or English).
 
 YOUR TASKS:
-1. Extract exact symptoms and complaints strictly mentioned in the transcript.
+1. Extract exact symptoms strictly mentioned in the transcript.
 2. Translate Urdu/Roman Urdu terms into clinical English terms.
 3. Diagnose the condition based ONLY on the spoken content.
 4. Dynamically generate appropriate medical prescriptions (generic drugs with dosages) and advice for the diagnosed condition.
 
-OUTPUT FORMAT (Strictly follow this layout):
+OUTPUT FORMAT:
 
 ### 📋 Clinical Information
 
@@ -128,7 +110,7 @@ OUTPUT FORMAT (Strictly follow this layout):
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Dynamically suggested medicine & dosage based on diagnosis]
+    * [Dynamically suggested generic medicine & dosage based on diagnosis]
 * **Advice/Next Steps:**
     * **Rest:** [Relevant advice]
     * **Hydration:** [Relevant fluid/diet advice]
@@ -140,26 +122,17 @@ OUTPUT FORMAT (Strictly follow this layout):
         {"role": "user", "content": f'Audio Transcript: "{transcription_text}"'}
     ]
 
-    models_to_try = [
-        "Qwen/Qwen2.5-7B-Instruct",
-        "meta-llama/Llama-3.1-8B-Instruct"
-    ]
-
-    for model_id in models_to_try:
-        try:
-            res = requests.post(
-                ROUTER_URL, 
-                headers=headers, 
-                json={"model": model_id, "messages": messages, "temperature": 0.1, "max_tokens": 800}, 
-                timeout=25
-            )
-            if res.status_code == 200:
-                result = res.json()
-                if "choices" in result and len(result["choices"]) > 0:
-                    return result["choices"][0]["message"]["content"].strip()
-        except Exception as err:
-            print(f"Error calling {model_id}: {err}")
-            continue
+    try:
+        # High quality open-source model through HF Router API
+        completion = client.chat.completions.create(
+            model="Qwen/Qwen2.5-7B-Instruct",
+            messages=messages,
+            max_tokens=800,
+            temperature=0.1
+        )
+        return completion.choices[0].message.content.strip()
+    except Exception as err:
+        print(f"AI Report Generation Error: {err}")
 
     return "Failed to process AI clinical response."
 
@@ -212,12 +185,11 @@ async def process_audio(
 
     try:
         audio_content = await audio.read()
-        filename = audio.filename if audio.filename else "recording.m4a"
         
-        # Real transcription check
-        transcribed_text = transcribe_recording(audio_content, filename)
+        # 1. Transcribe direct audio stream via HF Hub Client SDK
+        transcribed_text = transcribe_recording(audio_content)
 
-        # Send extracted transcription directly to AI Model
+        # 2. Send transcript directly to LLM for report/prescription generation
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
         pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
