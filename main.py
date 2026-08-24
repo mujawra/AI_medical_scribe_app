@@ -9,7 +9,6 @@ import tempfile
 import speech_recognition as sr
 from datetime import datetime
 from fpdf import FPDF
-from pydub import AudioSegment
 
 app = FastAPI()
 
@@ -35,29 +34,17 @@ latest_data = {
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
-def convert_to_wav(audio_bytes: bytes) -> bytes:
-    """Converts input audio bytes (webm, mp3, ogg, m4a) into clean 16kHz WAV bytes."""
-    try:
-        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
-        audio = audio.set_channels(1).set_frame_rate(16000)
-        wav_io = io.BytesIO()
-        audio.export(wav_io, format="wav")
-        wav_io.seek(0)
-        return wav_io.read()
-    except Exception as e:
-        print(f"Audio conversion error: {e}")
-        return audio_bytes
-
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
+    """Uses Hugging Face Whisper API directly (Supports AAC, M4A, MP3, WAV without ffmpeg)"""
     API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     try:
-        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
+        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=40)
         if response.status_code == 200:
             result = response.json()
             extracted_text = result.get("text", "").strip()
-            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org"]
-            if any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4:
+            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org", "you"]
+            if extracted_text.lower() in hallucinations or (any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4):
                 return ""
             return extracted_text
     except Exception as e:
@@ -65,37 +52,33 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
     return ""
 
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    clean_wav_bytes = convert_to_wav(audio_bytes)
-    
+    # 1. Hugging Face Whisper API to support all mobile audio formats (.aac, .m4a, .mp3, .wav)
+    hf_text = transcribe_audio_hf(audio_bytes)
+    if hf_text and len(hf_text.strip()) > 1:
+        return hf_text.strip()
+
+    # 2. Backup SpeechRecognition (Works fine if audio is native WAV/PCM)
     recognizer = sr.Recognizer()
-    
-    # 1. Try Google Urdu Speech Recognition
     try:
-        audio_file = io.BytesIO(clean_wav_bytes)
+        audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             recognizer.adjust_for_ambient_noise(source, duration=0.2)
             audio_data = recognizer.record(source)
             text = recognizer.recognize_google(audio_data, language="ur-PK")
             if text and len(text.strip()) > 1:
                 return text.strip()
-    except Exception as e:
-        print(f"Urdu SR Error: {e}")
+    except Exception:
+        pass
 
-    # 2. Try Google English Speech Recognition
     try:
-        audio_file = io.BytesIO(clean_wav_bytes)
+        audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             audio_data = recognizer.record(source)
             text = recognizer.recognize_google(audio_data, language="en-US")
             if text and len(text.strip()) > 1:
                 return text.strip()
-    except Exception as e:
-        print(f"English SR Error: {e}")
-
-    # 3. Backup HF Whisper API
-    text_hf = transcribe_audio_hf(clean_wav_bytes)
-    if text_hf and len(text_hf.strip()) > 1:
-        return text_hf.strip()
+    except Exception:
+        pass
 
     return ""
 
@@ -111,18 +94,18 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** Audio sound was unclear or silent.
-* **Possible Diagnosis:** Could not detect symptoms from audio.
+* **Chief Complaint:** Audio speech was unclear or missing.
+* **Possible Diagnosis:** Could not detect symptoms from recorded audio.
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
     * Please record clear audio again.
 * **Advice/Next Steps:**
-    * **Rest:** Speak close to the microphone.
+    * **Rest:** Speak clearly into the microphone.
     * **Hydration:** N/A
     * **Monitor Symptoms:** N/A
-    * **Follow-up:** Re-upload audio."""
+    * **Follow-up:** Re-upload doctor-patient consultation audio."""
 
     ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
     headers = {
@@ -138,7 +121,7 @@ Analyze the audio transcript provided and extract accurate medical notes.
 
 STRICT LAWS:
 1. Grounding: Extract ONLY symptoms, medical terms, and complaints explicitly spoken in the audio transcript. DO NOT invent or add unrelated conditions.
-2. Dynamic Medication: Suggest OTC medications and care plans strictly tailored to the detected disease/symptom.
+2. Dynamic Medication: Suggest generic OTC medications and care plans strictly tailored ONLY to the detected disease/symptom.
 3. Language: If spoken in Urdu or Roman Urdu, translate complaints into clear English script.
 
 Format strictly as:
