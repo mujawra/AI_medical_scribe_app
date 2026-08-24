@@ -34,30 +34,51 @@ latest_data = {
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
-def transcribe_audio_hf(audio_bytes: bytes) -> str:
-    """Uses Hugging Face Whisper API directly (Supports AAC, M4A, MP3, WAV without ffmpeg)"""
+def transcribe_audio_hf(audio_bytes: bytes, filename: str = "audio.wav") -> str:
+    """Sends raw audio to Hugging Face Whisper with proper Content-Type headers"""
     API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    
+    # Determine correct Content-Type from filename extension
+    ext = filename.split(".")[-1].lower() if "." in filename else "wav"
+    content_type_map = {
+        "aac": "audio/aac",
+        "m4a": "audio/m4a",
+        "mp3": "audio/mpeg",
+        "ogg": "audio/ogg",
+        "wav": "audio/wav",
+        "webm": "audio/webm"
+    }
+    content_type = content_type_map.get(ext, "audio/wav")
+
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": content_type
+    }
+
     try:
         response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=40)
         if response.status_code == 200:
             result = response.json()
             extracted_text = result.get("text", "").strip()
-            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org", "you"]
-            if extracted_text.lower() in hallucinations or (any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4):
+            
+            # Filter common AI Whisper noise/hallucinations
+            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org", "you", "Bye.", "Thank you."]
+            if extracted_text in hallucinations or (any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4):
                 return ""
             return extracted_text
+        else:
+            print(f"HF Status Code: {response.status_code}, Response: {response.text}")
     except Exception as e:
         print(f"HF Whisper Error: {e}")
     return ""
 
-def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    # 1. Hugging Face Whisper API to support all mobile audio formats (.aac, .m4a, .mp3, .wav)
-    hf_text = transcribe_audio_hf(audio_bytes)
+def transcribe_audio_fallback(audio_bytes: bytes, filename: str) -> str:
+    # 1. Primary: Try Hugging Face Whisper API with Proper Header
+    hf_text = transcribe_audio_hf(audio_bytes, filename)
     if hf_text and len(hf_text.strip()) > 1:
         return hf_text.strip()
 
-    # 2. Backup SpeechRecognition (Works fine if audio is native WAV/PCM)
+    # 2. Secondary: SpeechRecognition Engine (Works best with native WAV/PCM)
     recognizer = sr.Recognizer()
     try:
         audio_file = io.BytesIO(audio_bytes)
@@ -248,7 +269,9 @@ async def process_audio(
 
     try:
         audio_content = await audio.read()
-        transcribed_text = transcribe_audio_fallback(audio_content)
+        filename = audio.filename if audio.filename else "audio.wav"
+        
+        transcribed_text = transcribe_audio_fallback(audio_content, filename)
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
