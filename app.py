@@ -25,9 +25,7 @@ if uploaded_file is not None:
     if st.button("Process & Generate Medical Report 🚀"):
         with st.spinner("Processing audio and generating clinical report..."):
             try:
-                files = {
-                    "audio": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)
-                }
+                files = {"audio": (uploaded_file.name, uploaded_file.getvalue(), "audio/wav" if uploaded_file.name.endswith(".wav") else "audio/aac")}
                 data = {
                     "doctor_name": doctor_name,
                     "patient_name": patient_name
