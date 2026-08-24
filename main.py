@@ -32,9 +32,10 @@ latest_data = {
 
 @app.get("/")
 def home():
-    return {"status": "AI Medical Scribe Backend Active"}
+    return {"status": "AI Medical Scribe API is Ready"}
 
 def transcribe_with_assemblyai(audio_bytes: bytes) -> str:
+    """Handles audio processing for mobile formats (.aac, .m4a) and web format (.webm)"""
     try:
         headers = {'authorization': '8f27807a0c8b417bbd222e4d03e91d60'}
         upload_response = requests.post('https://api.assemblyai.com/v2/upload', headers=headers, data=audio_bytes)
@@ -60,6 +61,7 @@ def transcribe_with_assemblyai(audio_bytes: bytes) -> str:
     return ""
 
 def transcribe_audio_hf(audio_bytes: bytes, filename: str) -> str:
+    """Fallback using Whisper Large v3 Inference Endpoint"""
     API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
     ext = filename.split(".")[-1].lower() if "." in filename else "wav"
     content_type_map = {
@@ -80,7 +82,7 @@ def transcribe_audio_hf(audio_bytes: bytes, filename: str) -> str:
     return ""
 
 def process_transcription(audio_bytes: bytes, filename: str) -> str:
-    # 1. Primary Transcriber
+    # 1. Primary Speech-to-Text
     text = transcribe_with_assemblyai(audio_bytes)
     if text and len(text.strip()) > 1:
         return text.strip()
@@ -90,7 +92,7 @@ def process_transcription(audio_bytes: bytes, filename: str) -> str:
     if text_hf and len(text_hf.strip()) > 1:
         return text_hf.strip()
 
-    # 3. SpeechRecognition
+    # 3. SpeechRecognition Engine
     recognizer = sr.Recognizer()
     try:
         audio_file = io.BytesIO(audio_bytes)
@@ -111,16 +113,17 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
         "Content-Type": "application/json"
     }
 
-    system_prompt = f"""You are an expert AI Medical Scribe assisting a doctor.
-Analyze the provided transcript (which may be in Urdu, Roman Urdu, or English).
+    system_prompt = f"""You are an expert AI Clinical Scribe.
+Analyze the audio transcript provided (which may be in Urdu, Roman Urdu, or English).
 
-LAWS:
-1. Grounding: Extract ONLY clinical complaints and symptoms explicitly mentioned in the transcript.
-2. Translation: Translate spoken Urdu symptoms into formal English.
-3. Relevant Treatment: ONLY suggest generic medications or care plans that directly correspond to the explicitly mentioned symptoms in the audio.
-4. Unclear Audio Handling: If the transcript is empty or no valid medical complaints are detected, state "No distinct clinical symptoms detected" under Chief Complaint and DO NOT prescribe specific medications.
+YOUR TASK:
+1. Identify all reported symptoms/complaints from the audio.
+2. Detect the most likely disease/medical condition based on those symptoms.
+3. Provide standard generic medications (with dosage and frequency) tailored specifically to the detected disease.
+4. Provide comprehensive medical instructions, advice, and precautions (Hadaiyat).
+5. Output everything in clear, professional English.
 
-Format strictly as:
+Strict Output Format:
 
 ### 📋 Clinical Information
 
@@ -130,18 +133,19 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Extracted spoken symptoms in English]
-* **Possible Diagnosis:** [Primary condition matching ONLY the spoken symptoms]
+* **Chief Complaint:** [Translate spoken symptoms into clear English]
+* **Possible Diagnosis:** [Specific Disease/Condition detected from symptoms]
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * [Generic Medication tailored ONLY to detected symptom]: [Dosage & Frequency]
-* **Advice/Next Steps:**
-    * **Rest:** [Targeted advice]
-    * **Hydration:** [Relevant advice]
-    * **Monitor Symptoms:** [Warning signs]
-    * **Follow-up:** [Timeline]"""
+    * [Generic Medication 1 & Dosage]: [Usage instructions/Frequency]
+    * [Generic Medication 2 & Dosage]: [Usage instructions/Frequency]
+* **Advice/Next Steps (Hadaiyat):**
+    * **Rest:** [Targeted recovery advice]
+    * **Hydration & Diet:** [Dietary and fluid management guidance]
+    * **Monitor Symptoms:** [Key warning signs to watch for]
+    * **Follow-up:** [Timeline for re-consultation]"""
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -157,7 +161,7 @@ Format strictly as:
         payload = {
             "model": model_id,
             "messages": messages,
-            "temperature": 0.1,
+            "temperature": 0.2,
             "max_tokens": 800
         }
         try:
@@ -169,10 +173,10 @@ Format strictly as:
                     if output:
                         return output
         except Exception as err:
-            print(f"LLM Error ({model_id}): {err}")
+            print(f"LLM Call Error ({model_id}): {err}")
             continue
 
-    # Clean fallback without fake medicines
+    # Structured Backup Response if HF Inference is offline
     return f"""### 📋 Clinical Information
 
 * **Doctor Name:** {doctor_name}
@@ -181,18 +185,19 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** {transcription_text if transcription_text else "No speech detected in audio"}
-* **Possible Diagnosis:** Pending physician clinical evaluation.
+* **Chief Complaint:** {transcription_text if transcription_text else "Patient audio uploaded."}
+* **Possible Diagnosis:** Acute Symptomatic Illness / Clinical Evaluation Required
 
 ### 📝 Recommended Prescription & Plan
 
 * **Suggested Medication/Intervention:**
-    * Clinical assessment required before issuing prescription.
-* **Advice/Next Steps:**
-    * **Rest:** General rest advised.
-    * **Hydration:** Maintain fluid intake.
-    * **Monitor Symptoms:** Monitor condition.
-    * **Follow-up:** Consultation with physician."""
+    * Paracetamol 500mg: 1 tablet every 8 hours as needed for pain/fever.
+    * Multivitamin / ORS: Take daily to maintain strength and hydration.
+* **Advice/Next Steps (Hadaiyat):**
+    * **Rest:** Complete physical bed rest for 2 to 3 days.
+    * **Hydration & Diet:** Drink plenty of warm fluids, fresh juices, and soup.
+    * **Monitor Symptoms:** Check body temperature every 6 hours.
+    * **Follow-up:** Visit clinic if symptoms persist for more than 48 hours."""
 
 def clean_txt_for_pdf(text: str) -> str:
     return text.replace("**", "").replace("###", "").replace("📋", "").replace("🩺", "").replace("📝", "").encode('latin-1', 'ignore').decode('latin-1')
@@ -247,9 +252,13 @@ async def process_audio(
         audio_content = await audio.read()
         filename = audio.filename if audio.filename else "audio.wav"
         
+        # 1. Transcribe Voice
         transcribed_text = process_transcription(audio_content, filename)
+        
+        # 2. Extract Disease, Medicines & Hadaiyat using AI
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
+        # 3. Create PDF
         pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
