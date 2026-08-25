@@ -2,7 +2,6 @@ fastapi
 uvicorn
 requests
 fpdf2
-python-multipart
 SpeechRecognition
 huggingface_hub
 python-multipart
