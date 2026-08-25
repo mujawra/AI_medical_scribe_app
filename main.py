@@ -123,9 +123,10 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
 * **Chief Complaint:** Audio sound was unclear or empty.
 * **Possible Diagnosis:** Please record the audio clearly again.
 
-### 📝 Recommended Plan
+### 📝 Recommended Prescription & Plan
 
-* **Medication (Rough AI Suggestion — NOT a prescription):** Not applicable — no audio detected to process.
+* **Suggested Medication/Intervention (Rough AI Idea — standard adult reference, NOT a personalized prescription):**
+    * Not applicable — no audio detected to process.
 * **⚠️ Disclaimer:** This is an AI-generated rough idea only. It is not a prescription and must be reviewed and confirmed by the doctor before giving anything to the patient.
 * **Advice/Next Steps:**
     * **Rest:** Re-record speaking clearly into the microphone.
@@ -147,9 +148,9 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
 RULES (STRICT):
 1. ONLY extract symptoms, complaints, history, or observations explicitly spoken in the audio transcript. Do not invent or assume anything not said.
 2. Translate Urdu/Roman Urdu spoken text into professional English.
-3. You may suggest ONE common, generic, low-risk over-the-counter medicine class typically associated with the stated symptom (e.g. a general antipyretic/analgesic for fever/pain, an antacid for indigestion, ORS for dehydration) as a ROUGH IDEA ONLY — not a specific brand, not a dosage or frequency, and not for anything beyond simple, everyday symptoms.
-4. If the transcript mentions anything serious or ambiguous (chest pain, breathing difficulty, severe/persistent symptoms, pregnancy, children, high fever, symptoms lasting many days, or anything you are not confident about), do NOT suggest any medicine — write "Doctor must evaluate before any medication" instead.
-5. Never give a dosage, frequency, or duration under any circumstances — this always requires the doctor's judgment based on age, weight, and history not available from voice alone.
+3. You may suggest ONE common, generic, low-risk over-the-counter medicine typically associated with the stated symptom (e.g. a general antipyretic/analgesic for fever/pain, an antacid for indigestion, ORS for dehydration) as a ROUGH IDEA ONLY, for simple/everyday symptoms only.
+4. If you suggest a medicine, you may include its STANDARD ADULT TEXTBOOK REFERENCE DOSE (the generic range printed on any drug label, e.g. "Paracetamol 500-1000mg every 4-6 hours, max 4000mg/24h") — but you must label it clearly as a standard adult reference, not a personalized prescription, since it has not been adjusted for this specific patient's age, weight, allergies, or other conditions (none of which are knowable from voice alone).
+5. If the transcript mentions anything serious or ambiguous (chest pain, breathing difficulty, severe/persistent symptoms, pregnancy, children, high fever, symptoms lasting many days, or anything you are not confident about), do NOT suggest any medicine or dose — write "Doctor must evaluate before any medication" instead.
 6. If the patient mentions a medicine they already took, record it as history in Chief Complaint only — do not repeat or endorse it in the plan.
 
 Format strictly as:
@@ -165,10 +166,11 @@ Format strictly as:
 * **Chief Complaint:** [Translate spoken symptoms/history to English accurately, including any medicines the patient says they already took, reported as history only]
 * **Possible Diagnosis:** [Primary differential(s) suggested by the spoken complaint, phrased as "to be confirmed by physician"]
 
-### 📝 Recommended Plan
+### 📝 Recommended Prescription & Plan
 
-* **Medication (Rough AI Suggestion — NOT a prescription):** [One generic medicine class only if symptom is simple/common, per Rule 3–4, with no dosage. If not applicable, write "Doctor must evaluate before any medication."]
-* **⚠️ Disclaimer:** This is an AI-generated rough idea only. It is not a prescription and must be reviewed and confirmed by the doctor before giving anything to the patient.
+* **Suggested Medication/Intervention (Rough AI Idea — standard adult reference, NOT a personalized prescription):**
+    * [Generic medicine name]: [standard adult reference dose, per Rule 4], OR "Doctor must evaluate before any medication" if Rule 5 applies.
+* **⚠️ Disclaimer:** This is an AI-generated rough idea using a standard adult reference dose. It has not been adjusted for this patient's age, weight, allergies, or history, and must be reviewed and confirmed by the doctor before giving anything to the patient.
 * **Advice/Next Steps:**
     * **Rest:** [General, non-drug guidance for this issue]
     * **Hydration:** [Relevant general fluid/dietary guidance]
@@ -216,9 +218,10 @@ Format strictly as:
 * **Chief Complaint:** {transcription_text}
 * **Possible Diagnosis:** Evaluation required based on transcript.
 
-### 📝 Recommended Plan
+### 📝 Recommended Prescription & Plan
 
-* **Medication (Rough AI Suggestion — NOT a prescription):** Doctor must evaluate before any medication.
+* **Suggested Medication/Intervention (Rough AI Idea — standard adult reference, NOT a personalized prescription):**
+    * Doctor must evaluate before any medication.
 * **⚠️ Disclaimer:** This is an AI-generated rough idea only. It is not a prescription and must be reviewed and confirmed by the doctor before giving anything to the patient.
 * **Advice/Next Steps:**
     * **Rest:** General rest advised.
