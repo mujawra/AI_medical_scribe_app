@@ -7,8 +7,13 @@ import io
 import base64
 import tempfile
 import speech_recognition as sr
+from pydub import AudioSegment
+import imageio_ffmpeg
 from datetime import datetime
 from fpdf import FPDF
+
+# Vercel serverless has no system ffmpeg — imageio_ffmpeg ships a static binary via pip.
+AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
 
 app = FastAPI()
 
@@ -33,6 +38,23 @@ latest_data = {
 @app.get("/")
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
+
+def normalize_audio_to_wav(audio_bytes: bytes) -> bytes:
+    """
+    Phone browsers (esp. mobile Chrome/Safari) usually record in WebM/Opus or MP4/AAC,
+    which speech_recognition's AudioFile cannot read directly (it needs WAV/AIFF/FLAC).
+    This converts whatever format comes in into a clean 16kHz mono WAV using ffmpeg via pydub.
+    Requires ffmpeg to be installed on the server.
+    """
+    try:
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
+        wav_io = io.BytesIO()
+        audio_segment.export(wav_io, format="wav")
+        return wav_io.getvalue()
+    except Exception as e:
+        print(f"Audio normalization error: {e}")
+        return audio_bytes  # fall back to original bytes if conversion fails
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
     API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
@@ -252,6 +274,7 @@ async def process_audio(
 
     try:
         audio_content = await audio.read()
+        audio_content = normalize_audio_to_wav(audio_content)
         transcribed_text = transcribe_audio_fallback(audio_content)
 
         if not transcribed_text:
