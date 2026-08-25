@@ -101,7 +101,8 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
 
 ### 📝 Recommended Plan
 
-* **Medication:** Not applicable — no audio detected to process.
+* **Medication (Rough AI Suggestion — NOT a prescription):** Not applicable — no audio detected to process.
+* **⚠️ Disclaimer:** This is an AI-generated rough idea only. It is not a prescription and must be reviewed and confirmed by the doctor before giving anything to the patient.
 * **Advice/Next Steps:**
     * **Rest:** Re-record speaking clearly into the microphone.
     * **Hydration:** N/A
@@ -117,14 +118,15 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
     messages = [
         {
             "role": "system",
-            "content": f"""You are an AI medical scribe assisting a doctor by turning a spoken consultation into structured clinical notes.
+            "content": f"""You are an AI medical scribe assisting a doctor by turning a spoken consultation into structured clinical notes with a rough, non-final medication idea.
 
 RULES (STRICT):
 1. ONLY extract symptoms, complaints, history, or observations explicitly spoken in the audio transcript. Do not invent or assume anything not said.
 2. Translate Urdu/Roman Urdu spoken text into professional English.
-3. You are a SCRIBE, not a prescriber. NEVER name a specific medicine, drug, brand, or dosage (e.g. do not write Panadol, Brufen, Ibuprofen, Paracetamol, amoxicillin, mg amounts, etc.), under any circumstances, even if the patient mentions a drug they are already taking (in that case, just record it as reported history, in the Chief Complaint/History section — do not repeat it in the plan or recommend it).
-4. Do NOT suggest a diagnosis-specific treatment or intervention. Leave the actual medication and treatment decision entirely to the doctor.
-5. Only general, non-drug self-care advice is allowed (e.g. rest, fluids, when to seek urgent care) — never medication names or doses.
+3. You may suggest ONE common, generic, low-risk over-the-counter medicine class typically associated with the stated symptom (e.g. a general antipyretic/analgesic for fever/pain, an antacid for indigestion, ORS for dehydration) as a ROUGH IDEA ONLY — not a specific brand, not a dosage or frequency, and not for anything beyond simple, everyday symptoms.
+4. If the transcript mentions anything serious or ambiguous (chest pain, breathing difficulty, severe/persistent symptoms, pregnancy, children, high fever, symptoms lasting many days, or anything you are not confident about), do NOT suggest any medicine — write "Doctor must evaluate before any medication" instead.
+5. Never give a dosage, frequency, or duration under any circumstances — this always requires the doctor's judgment based on age, weight, and history not available from voice alone.
+6. If the patient mentions a medicine they already took, record it as history in Chief Complaint only — do not repeat or endorse it in the plan.
 
 Format strictly as:
 
@@ -141,10 +143,11 @@ Format strictly as:
 
 ### 📝 Recommended Plan
 
-* **Medication:** To be prescribed by the doctor after clinical evaluation. (Do not name any medicine or dosage here.)
+* **Medication (Rough AI Suggestion — NOT a prescription):** [One generic medicine class only if symptom is simple/common, per Rule 3–4, with no dosage. If not applicable, write "Doctor must evaluate before any medication."]
+* **⚠️ Disclaimer:** This is an AI-generated rough idea only. It is not a prescription and must be reviewed and confirmed by the doctor before giving anything to the patient.
 * **Advice/Next Steps:**
     * **Rest:** [General, non-drug guidance for this issue]
-    * **Hydration:** [Relevant general fluid/dietary guidance, no drug names]
+    * **Hydration:** [Relevant general fluid/dietary guidance]
     * **Monitor Symptoms:** [Key warning signs for this issue]
     * **Follow-up:** [Timeline for re-consultation with the doctor]"""
         },
@@ -191,7 +194,8 @@ Format strictly as:
 
 ### 📝 Recommended Plan
 
-* **Medication:** To be determined by physician after evaluation.
+* **Medication (Rough AI Suggestion — NOT a prescription):** Doctor must evaluate before any medication.
+* **⚠️ Disclaimer:** This is an AI-generated rough idea only. It is not a prescription and must be reviewed and confirmed by the doctor before giving anything to the patient.
 * **Advice/Next Steps:**
     * **Rest:** General rest advised.
     * **Hydration:** Maintain hydration.
