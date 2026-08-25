@@ -57,7 +57,9 @@ def normalize_audio_to_wav(audio_bytes: bytes) -> bytes:
         return audio_bytes  # fall back to original bytes if conversion fails
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
-    API_URL = "https://api-inference.huggingface.co/models/openai/whisper-large-v3-turbo"
+    # NOTE: api-inference.huggingface.co is deprecated (returns HTTP 410) as of 2026.
+    # Hugging Face now routes all serverless inference through router.huggingface.co.
+    API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     try:
         response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
@@ -277,15 +279,17 @@ async def process_audio(
         audio_content = normalize_audio_to_wav(audio_content)
         transcribed_text = transcribe_audio_fallback(audio_content)
 
-        if not transcribed_text:
-            transcribed_text = "Audio recorded but transcription was unclear. Patient requested clinical review."
+        # Keep transcribed_text truly empty if nothing was recognized, so generate_medical_report
+        # uses its own built-in "unclear audio" template instead of asking the LLM to interpret
+        # a fake placeholder sentence (which was causing confused, free-form LLM replies).
+        display_transcription = transcribed_text if transcribed_text else "Audio recorded but transcription was unclear."
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
-        pdf_bytes = generate_pdf_bytes(summary_text, transcribed_text, doc_name, pat_name, current_date)
+        pdf_bytes = generate_pdf_bytes(summary_text, display_transcription, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
-        latest_data["transcription"] = transcribed_text
+        latest_data["transcription"] = display_transcription
         latest_data["summary"] = summary_text
         latest_data["doctor"] = doc_name
         latest_data["patient"] = pat_name
@@ -293,7 +297,7 @@ async def process_audio(
 
         return {
             "status": "success", 
-            "transcription": transcribed_text, 
+            "transcription": display_transcription, 
             "summary": summary_text,
             "pdf_base64": pdf_base64
         }
