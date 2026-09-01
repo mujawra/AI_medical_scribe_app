@@ -333,7 +333,7 @@ async def process_audio(
         # so it always appears first in the app, regardless of frontend rendering order.
         summary_with_transcript = f"""### 🎙️ Voice Recording (Transcribed)
 
-> {roman_display_transcription}
+def transliterate_to_roman_urdu(urdu_text: str) -> str:
 
 ---
 
