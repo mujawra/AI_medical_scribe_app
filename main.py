@@ -107,6 +107,45 @@ def transcribe_audio_fallback(audio_bytes: bytes) -> str:
 
     return ""
 
+def transliterate_to_roman_urdu(urdu_text: str) -> str:
+    """
+    Converts Urdu-script text into Roman Urdu (same words, Latin letters) —
+    a transliteration, not a translation. Falls back to the original text if it fails.
+    """
+    if not urdu_text or urdu_text.strip() == "":
+        return urdu_text
+
+    ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": "You transliterate Urdu-script text into Roman Urdu (the same Urdu words, written phonetically using Latin/English letters, the way Urdu speakers commonly type on phones e.g. 'mujhe bukhar hai'). Do NOT translate the meaning into English — keep the same Urdu words, just change the script. Output ONLY the transliterated text, nothing else — no quotes, no explanation. If the input is already in Latin letters or English, return it unchanged."
+        },
+        {"role": "user", "content": urdu_text}
+    ]
+    payload = {
+        "model": "Qwen/Qwen2.5-7B-Instruct",
+        "messages": messages,
+        "temperature": 0.1,
+        "max_tokens": 300
+    }
+    try:
+        res = requests.post(ROUTER_URL, headers=headers, json=payload, timeout=20)
+        if res.status_code == 200:
+            result = res.json()
+            if "choices" in result and len(result["choices"]) > 0:
+                output = result["choices"][0]["message"]["content"].strip()
+                if output:
+                    return output
+    except Exception as e:
+        print(f"Roman Urdu transliteration error: {e}")
+
+    return urdu_text  # fall back to original script if transliteration fails
+
 def generate_medical_report(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
     
@@ -286,23 +325,24 @@ async def process_audio(
         # uses its own built-in "unclear audio" template instead of asking the LLM to interpret
         # a fake placeholder sentence (which was causing confused, free-form LLM replies).
         display_transcription = transcribed_text if transcribed_text else "Audio recorded but transcription was unclear."
+        roman_display_transcription = transliterate_to_roman_urdu(display_transcription)
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
-        # Prepend the voice transcription as its own section above "Clinical Information"
+        # Prepend the voice transcription (Roman Urdu) as its own section above "Clinical Information"
         # so it always appears first in the app, regardless of frontend rendering order.
         summary_with_transcript = f"""### 🎙️ Voice Recording (Transcribed)
 
-> {display_transcription}
+> {roman_display_transcription}
 
 ---
 
 {summary_text}"""
 
-        pdf_bytes = generate_pdf_bytes(summary_text, display_transcription, doc_name, pat_name, current_date)
+        pdf_bytes = generate_pdf_bytes(summary_text, roman_display_transcription, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
-        latest_data["transcription"] = display_transcription
+        latest_data["transcription"] = roman_display_transcription
         latest_data["summary"] = summary_text
         latest_data["doctor"] = doc_name
         latest_data["patient"] = pat_name
@@ -310,7 +350,7 @@ async def process_audio(
 
         return {
             "status": "success", 
-            "transcription": display_transcription, 
+            "transcription": roman_display_transcription, 
             "summary": summary_with_transcript,
             "pdf_base64": pdf_base64
         }
