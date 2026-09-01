@@ -289,6 +289,16 @@ async def process_audio(
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
+        # Prepend the voice transcription as its own section above "Clinical Information"
+        # so it always appears first in the app, regardless of frontend rendering order.
+        summary_with_transcript = f"""### 🎙️ Voice Recording (Transcribed)
+
+> {display_transcription}
+
+---
+
+{summary_text}"""
+
         pdf_bytes = generate_pdf_bytes(summary_text, display_transcription, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
 
@@ -301,7 +311,7 @@ async def process_audio(
         return {
             "status": "success", 
             "transcription": display_transcription, 
-            "summary": summary_text,
+            "summary": summary_with_transcript,
             "pdf_base64": pdf_base64
         }
     except Exception as e:
