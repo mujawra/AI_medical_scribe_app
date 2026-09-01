@@ -123,26 +123,30 @@ def transliterate_to_roman_urdu(urdu_text: str) -> str:
     messages = [
         {
             "role": "system",
-            "content": "You transliterate Urdu-script text into Roman Urdu (the same Urdu words, written phonetically using Latin/English letters, the way Urdu speakers commonly type on phones e.g. 'mujhe bukhar hai'). Do NOT translate the meaning into English — keep the same Urdu words, just change the script. Output ONLY the transliterated text, nothing else — no quotes, no explanation. If the input is already in Latin letters or English, return it unchanged."
+            "content": "You convert Urdu-script text into readable Latin-letter text, preserving the original spoken meaning exactly. Two cases: (1) If the Urdu-script text represents actual Urdu words, transliterate them phonetically into Roman Urdu (the way Urdu speakers type on phones, e.g. 'mujhe bukhar hai'). (2) If the Urdu-script text is actually English words spelled out phonetically in Urdu letters (this happens when a speech recognizer mishears English speech as Urdu), recognize this and output the correct, properly-spelled English words instead (e.g. if the Urdu letters phonetically spell out 'patient is suffering from fever and headache', output exactly that in correct English spelling). Do NOT translate meaning between languages — only recover the correct written form of the same words that were spoken. Output ONLY the converted text, nothing else — no quotes, no explanation. If the input is already in Latin letters, return it unchanged."
         },
         {"role": "user", "content": urdu_text}
     ]
-    payload = {
-        "model": "Qwen/Qwen2.5-7B-Instruct",
+    payload_base = {
         "messages": messages,
         "temperature": 0.1,
         "max_tokens": 300
     }
-    try:
-        res = requests.post(ROUTER_URL, headers=headers, json=payload, timeout=20)
-        if res.status_code == 200:
-            result = res.json()
-            if "choices" in result and len(result["choices"]) > 0:
-                output = result["choices"][0]["message"]["content"].strip()
-                if output:
-                    return output
-    except Exception as e:
-        print(f"Roman Urdu transliteration error: {e}")
+    for model_id in ["Qwen/Qwen2.5-7B-Instruct", "meta-llama/Llama-3.1-8B-Instruct"]:
+        payload = {**payload_base, "model": model_id}
+        try:
+            res = requests.post(ROUTER_URL, headers=headers, json=payload, timeout=20)
+            if res.status_code == 200:
+                result = res.json()
+                if "choices" in result and len(result["choices"]) > 0:
+                    output = result["choices"][0]["message"]["content"].strip()
+                    if output:
+                        return output
+            else:
+                print(f"Roman Urdu transliteration HTTP {res.status_code} from {model_id}: {res.text[:200]}")
+        except Exception as e:
+            print(f"Roman Urdu transliteration error ({model_id}): {e}")
+            continue
 
     return urdu_text  # fall back to original script if transliteration fails
 
