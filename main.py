@@ -146,6 +146,79 @@ def transliterate_to_roman_urdu(urdu_text: str) -> str:
 
     return urdu_text  # fall back to original script if transliteration fails
 
+def transcribe_long_audio(audio_bytes: bytes, chunk_seconds: int = 60) -> str:
+    """
+    Splits long audio into chunks (default 60s each), transcribes each chunk separately,
+    and joins them into one full transcript. Needed because Google SR / HF Whisper are
+    unreliable or timeout on long single files (e.g. a 30-minute recording).
+    """
+    try:
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+    except Exception as e:
+        print(f"Long audio load error: {e}")
+        return transcribe_audio_fallback(audio_bytes)  # fall back to single-shot on short/simple files
+
+    total_ms = len(audio_segment)
+    chunk_ms = chunk_seconds * 1000
+    full_text_parts = []
+
+    for start_ms in range(0, total_ms, chunk_ms):
+        chunk = audio_segment[start_ms:start_ms + chunk_ms].set_channels(1).set_frame_rate(16000)
+        chunk_io = io.BytesIO()
+        chunk.export(chunk_io, format="wav")
+        chunk_bytes = chunk_io.getvalue()
+
+        chunk_text = transcribe_audio_fallback(chunk_bytes)
+        if chunk_text:
+            full_text_parts.append(chunk_text)
+
+    return " ".join(full_text_parts).strip()
+
+def extract_medical_terms(full_transcript: str, doctor_name: str, patient_name: str) -> str:
+    """
+    For long recordings: instead of showing the full verbatim transcript, ask the LLM to pull out
+    only the medically relevant terms — symptoms, complaints, duration, history, anything spoken
+    medicine names (as history) — as a short bullet list. Non-medical chit-chat is dropped.
+    """
+    if not full_transcript or full_transcript.strip() == "":
+        return "No medical terms detected — audio was unclear or empty."
+
+    ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": """You are reviewing a long spoken consultation transcript (possibly Urdu/Roman Urdu/English mixed).
+Extract ONLY the medically relevant terms mentioned — symptoms, complaints, duration, severity, relevant history,
+and any medicines the patient says they already took (list these as reported history only).
+Ignore small talk, greetings, and anything not medically relevant.
+Output ONLY a short bullet list of medical terms/phrases (translated to English), nothing else — no headers, no extra commentary.
+If nothing medically relevant is found, output exactly: "No medical terms detected in this recording." """
+        },
+        {"role": "user", "content": full_transcript}
+    ]
+    payload = {
+        "model": "Qwen/Qwen2.5-7B-Instruct",
+        "messages": messages,
+        "temperature": 0.1,
+        "max_tokens": 500
+    }
+    try:
+        res = requests.post(ROUTER_URL, headers=headers, json=payload, timeout=25)
+        if res.status_code == 200:
+            result = res.json()
+            if "choices" in result and len(result["choices"]) > 0:
+                output = result["choices"][0]["message"]["content"].strip()
+                if output:
+                    return output
+    except Exception as e:
+        print(f"Medical term extraction error: {e}")
+
+    return "Medical term extraction failed — please review the full transcript manually."
+
 def generate_medical_report(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
     
@@ -319,7 +392,22 @@ async def process_audio(
     try:
         audio_content = await audio.read()
         audio_content = normalize_audio_to_wav(audio_content)
-        transcribed_text = transcribe_audio_fallback(audio_content)
+
+        # Check audio duration to decide short vs long processing path
+        try:
+            duration_seconds = len(AudioSegment.from_file(io.BytesIO(audio_content))) / 1000
+        except Exception:
+            duration_seconds = 0
+
+        LONG_AUDIO_THRESHOLD_SECONDS = 120  # recordings longer than 2 minutes use chunked processing
+
+        if duration_seconds > LONG_AUDIO_THRESHOLD_SECONDS:
+            full_transcript = transcribe_long_audio(audio_content)
+            transcribed_text = extract_medical_terms(full_transcript, doc_name, pat_name)
+            transcript_section_title = "🎙️ Extracted Medical Terms (from long recording)"
+        else:
+            transcribed_text = transcribe_audio_fallback(audio_content)
+            transcript_section_title = "🎙️ Voice Recording (Transcribed)"
 
         # Keep transcribed_text truly empty if nothing was recognized, so generate_medical_report
         # uses its own built-in "unclear audio" template instead of asking the LLM to interpret
@@ -331,9 +419,9 @@ async def process_audio(
 
         # Prepend the voice transcription (Roman Urdu) as its own section above "Clinical Information"
         # so it always appears first in the app, regardless of frontend rendering order.
-        summary_with_transcript = f"""### 🎙️ Voice Recording (Transcribed)
+        summary_with_transcript = f"""### {transcript_section_title}
 
-def transliterate_to_roman_urdu(urdu_text: str) -> str:
+> {roman_display_transcription}
 
 ---
 
