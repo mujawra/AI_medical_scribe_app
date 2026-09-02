@@ -40,11 +40,6 @@ def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
 def normalize_audio_to_wav(audio_bytes: bytes) -> bytes:
-    """
-    Phone browsers usually record in WebM/Opus or MP4/AAC,
-    which speech_recognition's AudioFile cannot read directly (it needs WAV/AIFF/FLAC).
-    Converts incoming audio into clean 16kHz mono WAV.
-    """
     try:
         audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
         audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
@@ -71,50 +66,8 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
         print(f"HF Whisper Error: {e}")
     return ""
 
-def transliterate_to_roman_urdu(urdu_text: str) -> str:
-    """
-    Converts Urdu-script text into readable English/Roman Urdu text.
-    """
-    if not urdu_text or urdu_text.strip() == "":
-        return urdu_text
-
-    ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    messages = [
-        {
-            "role": "system",
-            "content": "You convert Urdu-script text into readable Latin-letter text, preserving the original spoken meaning exactly. Two cases: (1) If the Urdu-script text represents actual Urdu words, transliterate them phonetically into Roman Urdu (the way Urdu speakers type on phones, e.g. 'mujhe bukhar hai'). (2) If the Urdu-script text is actually English words spelled out phonetically in Urdu letters (this happens when a speech recognizer mishears English speech as Urdu), recognize this and output the correct, properly-spelled English words instead (e.g. if the Urdu letters phonetically spell out 'patient is suffering from fever and headache', output exactly that in correct English spelling). Do NOT translate meaning between languages — only recover the correct written form of the same words that were spoken. Output ONLY the converted text, nothing else — no quotes, no explanation. If the input is already in Latin letters, return it unchanged."
-        },
-        {"role": "user", "content": urdu_text}
-    ]
-    payload_base = {
-        "messages": messages,
-        "temperature": 0.1,
-        "max_tokens": 300
-    }
-    for model_id in ["Qwen/Qwen2.5-7B-Instruct:fastest", "meta-llama/Llama-3.1-8B-Instruct:fastest"]:
-        payload = {**payload_base, "model": model_id}
-        try:
-            res = requests.post(ROUTER_URL, headers=headers, json=payload, timeout=20)
-            if res.status_code == 200:
-                result = res.json()
-                if "choices" in result and len(result["choices"]) > 0:
-                    output = result["choices"][0]["message"]["content"].strip()
-                    if output:
-                        return output
-            else:
-                print(f"Roman Urdu transliteration HTTP {res.status_code} from {model_id}: {res.text[:200]}")
-        except Exception as e:
-            print(f"Roman Urdu transliteration error ({model_id}): {e}")
-            continue
-
-    return urdu_text
-
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    # 1. First Try Google Speech Recognition (Urdu & English)
+    # 1. First Try Google Speech Recognition (Urdu Script)
     recognizer = sr.Recognizer()
     try:
         audio_file = io.BytesIO(audio_bytes)
@@ -124,8 +77,7 @@ def transcribe_audio_fallback(audio_bytes: bytes) -> str:
             # Urdu Try
             text = recognizer.recognize_google(audio_data, language="ur-PK")
             if text and len(text.strip()) > 1:
-                # Transliterate Urdu script to clear English / Roman Urdu text
-                return transliterate_to_roman_urdu(text.strip())
+                return text.strip()  # Direct Urdu Script return
     except Exception as e:
         print(f"Urdu SR Error: {e}")
 
@@ -253,7 +205,7 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
 
 RULES (STRICT):
 1. ONLY extract symptoms, complaints, history, or observations explicitly spoken in the audio transcript. Do not invent or assume anything not said.
-2. Translate Urdu/Roman Urdu spoken text into professional English.
+2. Translate Urdu script / Roman Urdu spoken text into professional English.
 3. You may suggest ONE common, generic, low-risk over-the-counter medicine typically associated with the stated symptom (e.g. a general antipyretic/analgesic for fever/pain, an antacid for indigestion, ORS for dehydration) as a ROUGH IDEA ONLY, for simple/everyday symptoms only.
 4. If you suggest a medicine, you may include its STANDARD ADULT TEXTBOOK REFERENCE DOSE (the generic range printed on any drug label, e.g. "Paracetamol 500-1000mg every 4-6 hours, max 4000mg/24h") — but you must label it clearly as a standard adult reference, not a personalized prescription, since it has not been adjusted for this specific patient's age, weight, allergies, or other conditions (none of which are knowable from voice alone).
 5. If the transcript mentions anything serious or ambiguous (chest pain, breathing difficulty, severe/persistent symptoms, pregnancy, children, high fever, symptoms lasting many days, or anything you are not confident about), do NOT suggest any medicine or dose — write "Doctor must evaluate before any medication" instead.
@@ -389,13 +341,13 @@ async def process_audio(
         audio_content = await audio.read()
         audio_content = normalize_audio_to_wav(audio_content)
 
-        # Check audio duration to decide short vs long processing path
+        # Check audio duration
         try:
             duration_seconds = len(AudioSegment.from_file(io.BytesIO(audio_content))) / 1000
         except Exception:
             duration_seconds = 0
 
-        LONG_AUDIO_THRESHOLD_SECONDS = 120  # recordings longer than 2 minutes use chunked processing
+        LONG_AUDIO_THRESHOLD_SECONDS = 120
 
         if duration_seconds > LONG_AUDIO_THRESHOLD_SECONDS:
             full_transcript = transcribe_long_audio(audio_content)
@@ -409,7 +361,7 @@ async def process_audio(
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
-        # Explicitly prepend top heading so it matches Image 1 layout
+        # Format with top heading title explicitly
         summary_with_transcript = f"### {transcript_section_title}\n\n> {display_transcription}\n\n---\n\n{summary_text}"
 
         pdf_bytes = generate_pdf_bytes(summary_text, display_transcription, doc_name, pat_name, current_date)
