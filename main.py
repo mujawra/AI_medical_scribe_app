@@ -41,10 +41,9 @@ def home():
 
 def normalize_audio_to_wav(audio_bytes: bytes) -> bytes:
     """
-    Phone browsers (esp. mobile Chrome/Safari) usually record in WebM/Opus or MP4/AAC,
+    Phone browsers usually record in WebM/Opus or MP4/AAC,
     which speech_recognition's AudioFile cannot read directly (it needs WAV/AIFF/FLAC).
-    This converts whatever format comes in into a clean 16kHz mono WAV using ffmpeg via pydub.
-    Requires ffmpeg to be installed on the server.
+    Converts incoming audio into clean 16kHz mono WAV.
     """
     try:
         audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
@@ -57,8 +56,6 @@ def normalize_audio_to_wav(audio_bytes: bytes) -> bytes:
         return audio_bytes  # fall back to original bytes if conversion fails
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
-    # NOTE: api-inference.huggingface.co is deprecated (returns HTTP 410) as of 2026.
-    # Hugging Face now routes all serverless inference through router.huggingface.co.
     API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     try:
@@ -74,43 +71,9 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
         print(f"HF Whisper Error: {e}")
     return ""
 
-def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    # 1. First Try Google Speech Recognition (Urdu & English) - Highly Accurate for Speech
-    recognizer = sr.Recognizer()
-    try:
-        audio_file = io.BytesIO(audio_bytes)
-        with sr.AudioFile(audio_file) as source:
-            recognizer.adjust_for_ambient_noise(source, duration=0.2)
-            audio_data = recognizer.record(source)
-            # Urdu Try
-            text = recognizer.recognize_google(audio_data, language="ur-PK")
-            if text and len(text.strip()) > 1:
-                return text.strip()
-    except Exception as e:
-        print(f"Urdu SR Error: {e}")
-
-    try:
-        audio_file = io.BytesIO(audio_bytes)
-        with sr.AudioFile(audio_file) as source:
-            audio_data = recognizer.record(source)
-            # English Try
-            text = recognizer.recognize_google(audio_data, language="en-US")
-            if text and len(text.strip()) > 1:
-                return text.strip()
-    except Exception as e:
-        print(f"English SR Error: {e}")
-
-    # 2. Backup HF Whisper API
-    text_hf = transcribe_audio_hf(audio_bytes)
-    if text_hf and len(text_hf.strip()) > 1:
-        return text_hf.strip()
-
-    return ""
-
 def transliterate_to_roman_urdu(urdu_text: str) -> str:
     """
-    Converts Urdu-script text into Roman Urdu (same words, Latin letters) —
-    a transliteration, not a translation. Falls back to the original text if it fails.
+    Converts Urdu-script text into readable English/Roman Urdu text.
     """
     if not urdu_text or urdu_text.strip() == "":
         return urdu_text
@@ -148,19 +111,48 @@ def transliterate_to_roman_urdu(urdu_text: str) -> str:
             print(f"Roman Urdu transliteration error ({model_id}): {e}")
             continue
 
-    return urdu_text  # fall back to original script if transliteration fails
+    return urdu_text
+
+def transcribe_audio_fallback(audio_bytes: bytes) -> str:
+    # 1. First Try Google Speech Recognition (Urdu & English)
+    recognizer = sr.Recognizer()
+    try:
+        audio_file = io.BytesIO(audio_bytes)
+        with sr.AudioFile(audio_file) as source:
+            recognizer.adjust_for_ambient_noise(source, duration=0.2)
+            audio_data = recognizer.record(source)
+            # Urdu Try
+            text = recognizer.recognize_google(audio_data, language="ur-PK")
+            if text and len(text.strip()) > 1:
+                # Transliterate Urdu script to clear English / Roman Urdu text
+                return transliterate_to_roman_urdu(text.strip())
+    except Exception as e:
+        print(f"Urdu SR Error: {e}")
+
+    try:
+        audio_file = io.BytesIO(audio_bytes)
+        with sr.AudioFile(audio_file) as source:
+            audio_data = recognizer.record(source)
+            # English Try
+            text = recognizer.recognize_google(audio_data, language="en-US")
+            if text and len(text.strip()) > 1:
+                return text.strip()
+    except Exception as e:
+        print(f"English SR Error: {e}")
+
+    # 2. Backup HF Whisper API
+    text_hf = transcribe_audio_hf(audio_bytes)
+    if text_hf and len(text_hf.strip()) > 1:
+        return text_hf.strip()
+
+    return ""
 
 def transcribe_long_audio(audio_bytes: bytes, chunk_seconds: int = 60) -> str:
-    """
-    Splits long audio into chunks (default 60s each), transcribes each chunk separately,
-    and joins them into one full transcript. Needed because Google SR / HF Whisper are
-    unreliable or timeout on long single files (e.g. a 30-minute recording).
-    """
     try:
         audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
     except Exception as e:
         print(f"Long audio load error: {e}")
-        return transcribe_audio_fallback(audio_bytes)  # fall back to single-shot on short/simple files
+        return transcribe_audio_fallback(audio_bytes)
 
     total_ms = len(audio_segment)
     chunk_ms = chunk_seconds * 1000
@@ -179,11 +171,6 @@ def transcribe_long_audio(audio_bytes: bytes, chunk_seconds: int = 60) -> str:
     return " ".join(full_text_parts).strip()
 
 def extract_medical_terms(full_transcript: str, doctor_name: str, patient_name: str) -> str:
-    """
-    For long recordings: instead of showing the full verbatim transcript, ask the LLM to pull out
-    only the medically relevant terms — symptoms, complaints, duration, history, anything spoken
-    medicine names (as history) — as a short bullet list. Non-medical chit-chat is dropped.
-    """
     if not full_transcript or full_transcript.strip() == "":
         return "No medical terms detected — audio was unclear or empty."
 
@@ -230,7 +217,6 @@ If nothing medically relevant is found, output exactly: "No medical terms detect
 def generate_medical_report(transcription_text, doctor_name, patient_name):
     report_date = datetime.now().strftime("%Y-%m-%d")
     
-    # If audio transcription was completely empty, don't call AI LLM
     if not transcription_text or transcription_text.strip() == "":
         return f"""### 📋 Clinical Information
 
@@ -414,27 +400,17 @@ async def process_audio(
         if duration_seconds > LONG_AUDIO_THRESHOLD_SECONDS:
             full_transcript = transcribe_long_audio(audio_content)
             transcribed_text = extract_medical_terms(full_transcript, doc_name, pat_name)
-            transcript_section_title = "🎙️ Extracted Medical Terms (from long recording)"
+            transcript_section_title = "🎙️ Voice Recording (Transcribed)"
         else:
             transcribed_text = transcribe_audio_fallback(audio_content)
             transcript_section_title = "🎙️ Voice Recording (Transcribed)"
 
-        # Keep transcribed_text truly empty if nothing was recognized, so generate_medical_report
-        # uses its own built-in "unclear audio" template instead of asking the LLM to interpret
-        # a fake placeholder sentence (which was causing confused, free-form LLM replies).
         display_transcription = transcribed_text if transcribed_text else "Audio recorded but transcription was unclear."
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
-        # Prepend the voice transcription as its own section above "Clinical Information"
-        # so it always appears first in the app, regardless of frontend rendering order.
-        summary_with_transcript = f"""### {transcript_section_title}
-
-> {display_transcription}
-
----
-
-{summary_text}"""
+        # Explicitly prepend top heading so it matches Image 1 layout
+        summary_with_transcript = f"### {transcript_section_title}\n\n> {display_transcription}\n\n---\n\n{summary_text}"
 
         pdf_bytes = generate_pdf_bytes(summary_text, display_transcription, doc_name, pat_name, current_date)
         pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
