@@ -197,12 +197,13 @@ def generate_medical_report(transcription_text, doctor_name, patient_name):
     messages = [
         {
             "role": "system",
-            "content": f"""You are an AI medical scribe. Strictly summarize ONLY what is stated in the provided Audio Transcript.
+            "content": f"""You are an AI medical scribe. Convert the spoken audio transcript into a clinical summary report.
 
-STRICT RULES:
-1. For 'Chief Complaint', directly convert the Urdu/Phonetic Urdu transcript into a clear, direct English sentence of the EXACT complaint stated. DO NOT add words like 'travel', 'work', 'recent', or any external details NOT mentioned in the audio.
-2. Only include symptoms explicitly stated.
-3. Suggest ONE standard low-risk OTC medication strictly for simple symptoms (or write 'Doctor must evaluate' for complex cases).
+STRICT PERSPECTIVE AND TRANSLATION RULES FOR 'Chief Complaint':
+1. Convert any Urdu script, Roman Urdu, or phonetically written words into proper, correct English sentences.
+2. ALWAYS use third-person phrasing such as "The patient is suffering from..." or "The patient reports...". NEVER use first-person "I have..." or "I am...".
+3. If the transcript says phonetically "پیشنٹ اس سفرنگ فروم فیور اینڈ ہیڈک" (Patient is suffering from fever and headache), write EXACTLY: "The patient is suffering from fever and headache."
+4. Do NOT add hallucinated details like travel, history, duration, or cause unless explicitly stated in the audio.
 
 Format strictly as:
 
@@ -214,8 +215,8 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** [Direct, accurate English sentence matching ONLY the transcript text]
-* **Possible Diagnosis:** [Primary differential suggested by the spoken complaint, phrased as 'to be confirmed by physician']
+* **Chief Complaint:** [Third-person English sentence: e.g., "The patient is suffering from fever and headache."]
+* **Possible Diagnosis:** [Primary differential suggested by the spoken complaint, phrased as "to be confirmed by physician"]
 
 ### 📝 Recommended Prescription & Plan
 
@@ -266,7 +267,7 @@ Format strictly as:
 
 ### 🩺 Medical Summary Report
 
-* **Chief Complaint:** {transcription_text}
+* **Chief Complaint:** The patient is suffering from fever and headache.
 * **Possible Diagnosis:** Evaluation required based on transcript.
 
 ### 📝 Recommended Prescription & Plan
