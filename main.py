@@ -41,31 +41,48 @@ def home():
 
 def normalize_audio_to_wav(audio_bytes: bytes, filename: str = "") -> bytes:
     """
-    Converts any input audio format (OGG, MP3, M4A, AAC, WEBM, WAV, etc.)
+    Converts any input audio format (OGG/Opus, MP3, M4A, AAC, WEBM, WAV)
     into a standardized single-channel 16kHz WAV byte stream.
     """
-    try:
-        # Determine format hint from filename if available
-        ext = os.path.splitext(filename)[1].replace(".", "").lower() if filename else None
-        
-        # Try reading with format hint first, fallback to automatic detection
-        try:
-            if ext:
-                audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format=ext)
-            else:
-                audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
-        except Exception:
-            # Fallback auto-detection without explicit format hint
-            audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+    ext = os.path.splitext(filename)[1].replace(".", "").lower() if filename else "ogg"
+    if not ext:
+        ext = "ogg"
 
-        # Standardize channels and sample rate for Whisper / SpeechRecognition
+    # Step 1: Temporary File approach (Most reliable for WhatsApp OGG/Opus codecs)
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp_in:
+            tmp_in.write(audio_bytes)
+            tmp_in_path = tmp_in.name
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_out:
+            tmp_out_path = tmp_out.name
+
+        # Load & convert using pydub + imageio_ffmpeg
+        audio_segment = AudioSegment.from_file(tmp_in_path)
+        audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
+        audio_segment.export(tmp_out_path, format="wav")
+
+        with open(tmp_out_path, "rb") as f:
+            wav_bytes = f.read()
+
+        # Clean up temp files
+        if os.path.exists(tmp_in_path): os.remove(tmp_in_path)
+        if os.path.exists(tmp_out_path): os.remove(tmp_out_path)
+
+        return wav_bytes
+    except Exception as e:
+        print(f"Tempfile conversion error ({ext}): {e}")
+
+    # Step 2: In-Memory Fallback
+    try:
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
         audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
         wav_io = io.BytesIO()
         audio_segment.export(wav_io, format="wav")
         return wav_io.getvalue()
     except Exception as e:
-        print(f"Audio normalization error: {e}")
-        return audio_bytes  # Fall back to original bytes if conversion fails
+        print(f"Memory normalization error: {e}")
+        return audio_bytes
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
     API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
@@ -84,32 +101,34 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
     return ""
 
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    # 1. First Try Google Speech Recognition (Urdu Script)
     recognizer = sr.Recognizer()
+    
+    # 1. First Try Google Speech Recognition (Urdu Script)
     try:
         audio_file = io.BytesIO(audio_bytes)
+        audio_file.seek(0)
         with sr.AudioFile(audio_file) as source:
             recognizer.adjust_for_ambient_noise(source, duration=0.2)
             audio_data = recognizer.record(source)
-            # Urdu Try
             text = recognizer.recognize_google(audio_data, language="ur-PK")
             if text and len(text.strip()) > 1:
-                return text.strip()  # Direct Urdu Script return
+                return text.strip()
     except Exception as e:
         print(f"Urdu SR Error: {e}")
 
+    # 2. English Try
     try:
         audio_file = io.BytesIO(audio_bytes)
+        audio_file.seek(0)
         with sr.AudioFile(audio_file) as source:
             audio_data = recognizer.record(source)
-            # English Try
             text = recognizer.recognize_google(audio_data, language="en-US")
             if text and len(text.strip()) > 1:
                 return text.strip()
     except Exception as e:
         print(f"English SR Error: {e}")
 
-    # 2. Backup HF Whisper API
+    # 3. Backup HF Whisper API
     text_hf = transcribe_audio_hf(audio_bytes)
     if text_hf and len(text_hf.strip()) > 1:
         return text_hf.strip()
@@ -349,8 +368,8 @@ async def process_audio(
     try:
         raw_audio_content = await audio.read()
         
-        # Pass filename to assist format auto-detection (e.g., .ogg, .mp3, .m4a)
-        audio_content = normalize_audio_to_wav(raw_audio_content, filename=audio.filename or "")
+        # Pass filename to assist format auto-detection
+        audio_content = normalize_audio_to_wav(raw_audio_content, filename=audio.filename or "file.ogg")
 
         # Check audio duration using converted WAV bytes
         try:
