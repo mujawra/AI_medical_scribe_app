@@ -137,7 +137,10 @@ def normalize_audio_to_wav(audio_bytes: bytes, filename: str = "", content_type:
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
     API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "audio/wav",  # audio_bytes here is always our normalized WAV output
+    }
     try:
         response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
         if response.status_code == 200:
