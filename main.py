@@ -136,33 +136,17 @@ def normalize_audio_to_wav(audio_bytes: bytes, filename: str = "", content_type:
         return audio_bytes  # fall back to original bytes if every attempt fails
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
-    """
-    Calls HF Whisper API - Prompting & Headers force Urdu Output instead of Devanagari/Hindi
-    """
     API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
-    headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "audio/ogg"  # Explicit media type for WhatsApp OGG
-    }
-    
-    # Send request with parameters for Urdu language guidance
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     try:
-        response = requests.post(
-            API_URL, 
-            headers=headers, 
-            data=audio_bytes, 
-            params={"language": "ur", "task": "transcribe"},
-            timeout=35
-        )
+        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
         if response.status_code == 200:
             result = response.json()
             extracted_text = result.get("text", "").strip()
-            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org", "you"]
-            if any(h.lower() == extracted_text.lower() for h in hallucinations) or len(extracted_text) < 2:
+            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org"]
+            if any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4:
                 return ""
             return extracted_text
-        else:
-            print(f"HF Status Code: {response.status_code}, Response: {response.text}")
     except Exception as e:
         print(f"HF Whisper Error: {e}")
     return ""
