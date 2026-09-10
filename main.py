@@ -91,71 +91,71 @@ def guess_audio_format(filename: str, content_type: str) -> Optional[str]:
             return CONTENT_TYPE_FORMAT_MAP[ct]
 
     return None
-def normalize_audio_to_wav(audio_bytes: bytes, filename: str = "") -> bytes:
-    """
-    Universal Converter:
-    Takes any input audio (OGG, MP3, M4A, WebM) and converts it to 16kHz mono WAV 
-    so both Google SR and HF Whisper receive standardized input.
-    """
-    ext = os.path.splitext(filename)[1].replace(".", "").lower() if filename else "ogg"
-    if not ext:
-        ext = "ogg"
 
+def normalize_audio_to_wav(audio_bytes: bytes, filename: str = "", content_type: str = "") -> bytes:
+    """
+    Converts whatever audio format comes in (WAV, MP3, M4A, AAC, OGG, WebM, FLAC,
+    WMA, AMR, 3GP — covering laptop and Android recordings alike) into a clean
+    16kHz mono WAV, using ffmpeg directly via an explicit format hint so pydub
+    never needs the missing ffprobe binary.
+    """
+    detected_format = guess_audio_format(filename, content_type)
+
+    # Try the detected/likely format first, then fall back to a couple of common
+    # alternates, then finally let pydub attempt full auto-detection as a last resort.
+    candidate_formats = []
+    if detected_format:
+        candidate_formats.append(detected_format)
+    for fmt in ["ogg", "webm", "mp3", "m4a", "wav", "aac", "3gp", "amr"]:
+        if fmt not in candidate_formats:
+            candidate_formats.append(fmt)
+
+    last_error = None
+    for fmt in candidate_formats:
+        try:
+            audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format=fmt)
+            audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
+            wav_io = io.BytesIO()
+            audio_segment.export(wav_io, format="wav")
+            return wav_io.getvalue()
+        except Exception as e:
+            last_error = e
+            continue
+
+    # Last resort: let pydub guess with no format hint at all.
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp_in:
-            tmp_in.write(audio_bytes)
-            tmp_in_path = tmp_in.name
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_out:
-            tmp_out_path = tmp_out.name
-
-        segment = AudioSegment.from_file(tmp_in_path)
-        segment = segment.set_channels(1).set_frame_rate(16000)
-        segment.export(tmp_out_path, format="wav")
-
-        with open(tmp_out_path, "rb") as f:
-            wav_bytes = f.read()
-
-        if os.path.exists(tmp_in_path): os.remove(tmp_in_path)
-        if os.path.exists(tmp_out_path): os.remove(tmp_out_path)
-
-        return wav_bytes
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
+        wav_io = io.BytesIO()
+        audio_segment.export(wav_io, format="wav")
+        return wav_io.getvalue()
     except Exception as e:
-        print(f"Audio normalization error: {e}")
-        return audio_bytes
+        print(f"Audio normalization error (filename={filename!r}, content_type={content_type!r}, "
+              f"detected_format={detected_format!r}): tried {candidate_formats}, "
+              f"last error={last_error}, final error={e}")
+        return audio_bytes  # fall back to original bytes if every attempt fails
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
-    """
-    Calls HF Whisper API with strict Urdu language parameter 
-    to force output in Urdu Script (اردو) instead of Hindi (Devanagari).
-    """
     API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "audio/wav"
+        "Content-Type": "audio/wav",  # audio_bytes here is always our normalized WAV output
     }
-    
-    # Passing language="ur" parameter forces Whisper to return Urdu script
     try:
-        response = requests.post(
-            API_URL, 
-            headers=headers, 
-            data=audio_bytes, 
-            params={"language": "ur", "task": "transcribe"},
-            timeout=35
-        )
+        response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
         if response.status_code == 200:
             result = response.json()
             extracted_text = result.get("text", "").strip()
-            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org", "you"]
-            if any(h.lower() == extracted_text.lower() for h in hallucinations) or len(extracted_text) < 2:
+            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org"]
+            if any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4:
                 return ""
             return extracted_text
         else:
-            print(f"HF Status Code: {response.status_code}, Response: {response.text}")
+            print(f"HF Whisper HTTP {response.status_code}: {response.text[:300]}")
     except Exception as e:
         print(f"HF Whisper Error: {e}")
     return ""
+
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
     # 1. First Try Google Speech Recognition (Urdu Script)
     recognizer = sr.Recognizer()
