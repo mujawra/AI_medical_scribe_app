@@ -12,8 +12,11 @@ import imageio_ffmpeg
 from datetime import datetime
 from fpdf import FPDF
 
-# Vercel serverless has no system ffmpeg — imageio_ffmpeg ships a static binary via pip.
-AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
+# Set FFmpeg converter path
+try:
+    AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
+except Exception as e:
+    print(f"FFmpeg path binding notice: {e}")
 
 app = FastAPI()
 
@@ -41,50 +44,42 @@ def home():
 
 def normalize_audio_to_wav(audio_bytes: bytes, filename: str = "") -> bytes:
     """
-    Converts any input audio format (OGG/Opus, MP3, M4A, AAC, WEBM, WAV)
-    into a standardized single-channel 16kHz WAV byte stream.
+    Safely converts OGG/Opus, M4A, MP3, WEBM, WAV into 16kHz mono WAV bytes
+    handling Vercel serverless environment properly.
     """
-    ext = os.path.splitext(filename)[1].replace(".", "").lower() if filename else "ogg"
-    if not ext:
-        ext = "ogg"
-
-    # Step 1: Temporary File approach (Most reliable for WhatsApp OGG/Opus codecs)
+    ext = os.path.splitext(filename)[1].replace(".", "").lower() if filename else ""
+    
+    # Attempt temp file conversion using imageio_ffmpeg
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp_in:
+        suffix_in = f".{ext}" if ext else ".ogg"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix_in) as tmp_in:
             tmp_in.write(audio_bytes)
             tmp_in_path = tmp_in.name
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_out:
             tmp_out_path = tmp_out.name
 
-        # Load & convert using pydub + imageio_ffmpeg
-        audio_segment = AudioSegment.from_file(tmp_in_path)
-        audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
-        audio_segment.export(tmp_out_path, format="wav")
+        segment = AudioSegment.from_file(tmp_in_path)
+        segment = segment.set_channels(1).set_frame_rate(16000)
+        segment.export(tmp_out_path, format="wav")
 
         with open(tmp_out_path, "rb") as f:
             wav_bytes = f.read()
 
-        # Clean up temp files
         if os.path.exists(tmp_in_path): os.remove(tmp_in_path)
         if os.path.exists(tmp_out_path): os.remove(tmp_out_path)
 
-        return wav_bytes
+        if wav_bytes and len(wav_bytes) > 100:
+            return wav_bytes
     except Exception as e:
-        print(f"Tempfile conversion error ({ext}): {e}")
+        print(f"Audio normalization error: {e}")
 
-    # Step 2: In-Memory Fallback
-    try:
-        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
-        audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
-        wav_io = io.BytesIO()
-        audio_segment.export(wav_io, format="wav")
-        return wav_io.getvalue()
-    except Exception as e:
-        print(f"Memory normalization error: {e}")
-        return audio_bytes
+    return audio_bytes  # Fall back to raw bytes
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
+    """
+    Calls HF Whisper API directly — directly supports raw OGG, Opus, MP3 & WAV
+    """
     API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
     try:
@@ -92,18 +87,34 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
         if response.status_code == 200:
             result = response.json()
             extracted_text = result.get("text", "").strip()
-            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org"]
-            if any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4:
+            hallucinations = ["Thank you for watching!", "Subtitles by", "Amara.org", "you"]
+            if any(h.lower() == extracted_text.lower() for h in hallucinations) or len(extracted_text) < 2:
                 return ""
             return extracted_text
+        else:
+            print(f"HF Status Code: {response.status_code}, Response: {response.text}")
     except Exception as e:
         print(f"HF Whisper Error: {e}")
     return ""
 
-def transcribe_audio_fallback(audio_bytes: bytes) -> str:
+def transcribe_audio_fallback(audio_bytes: bytes, raw_original_bytes: bytes = None) -> str:
+    """
+    Primary strategy: Hugging Face Whisper Large v3 (Directly handles OGG/Opus).
+    Secondary strategy: Google Speech Recognition fallback.
+    """
+    # 1. Try HF Whisper with raw original bytes first (Best for OGG/Opus)
+    if raw_original_bytes:
+        text_hf_raw = transcribe_audio_hf(raw_original_bytes)
+        if text_hf_raw and len(text_hf_raw.strip()) > 1:
+            return text_hf_raw.strip()
+
+    # 2. Try HF Whisper with normalized WAV bytes
+    text_hf = transcribe_audio_hf(audio_bytes)
+    if text_hf and len(text_hf.strip()) > 1:
+        return text_hf.strip()
+
+    # 3. Google Speech Recognition (Urdu)
     recognizer = sr.Recognizer()
-    
-    # 1. First Try Google Speech Recognition (Urdu Script)
     try:
         audio_file = io.BytesIO(audio_bytes)
         audio_file.seek(0)
@@ -116,7 +127,7 @@ def transcribe_audio_fallback(audio_bytes: bytes) -> str:
     except Exception as e:
         print(f"Urdu SR Error: {e}")
 
-    # 2. English Try
+    # 4. Google Speech Recognition (English)
     try:
         audio_file = io.BytesIO(audio_bytes)
         audio_file.seek(0)
@@ -128,16 +139,11 @@ def transcribe_audio_fallback(audio_bytes: bytes) -> str:
     except Exception as e:
         print(f"English SR Error: {e}")
 
-    # 3. Backup HF Whisper API
-    text_hf = transcribe_audio_hf(audio_bytes)
-    if text_hf and len(text_hf.strip()) > 1:
-        return text_hf.strip()
-
     return ""
 
 def transcribe_long_audio(audio_bytes: bytes, chunk_seconds: int = 60) -> str:
     try:
-        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format="wav")
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
     except Exception as e:
         print(f"Long audio load error: {e}")
         return transcribe_audio_fallback(audio_bytes)
@@ -368,30 +374,30 @@ async def process_audio(
     try:
         raw_audio_content = await audio.read()
         
-        # Pass filename to assist format auto-detection
-        audio_content = normalize_audio_to_wav(raw_audio_content, filename=audio.filename or "file.ogg")
+        # 1. Standardize Audio to WAV
+        wav_audio_content = normalize_audio_to_wav(raw_audio_content, filename=audio.filename or "audio.ogg")
 
-        # Check audio duration using converted WAV bytes
+        # 2. Estimate Duration safely
         try:
-            duration_seconds = len(AudioSegment.from_file(io.BytesIO(audio_content), format="wav")) / 1000
+            duration_seconds = len(AudioSegment.from_file(io.BytesIO(wav_audio_content))) / 1000
         except Exception:
             duration_seconds = 0
 
         LONG_AUDIO_THRESHOLD_SECONDS = 120
 
+        # 3. Transcribe Audio
         if duration_seconds > LONG_AUDIO_THRESHOLD_SECONDS:
-            full_transcript = transcribe_long_audio(audio_content)
+            full_transcript = transcribe_long_audio(wav_audio_content)
             transcribed_text = extract_medical_terms(full_transcript, doc_name, pat_name)
             transcript_section_title = "🎙️ Voice Recording (Transcribed)"
         else:
-            transcribed_text = transcribe_audio_fallback(audio_content)
+            transcribed_text = transcribe_audio_fallback(wav_audio_content, raw_original_bytes=raw_audio_content)
             transcript_section_title = "🎙️ Voice Recording (Transcribed)"
 
         display_transcription = transcribed_text if transcribed_text else "Audio recorded but transcription was unclear."
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
-        # Prepend top transcript block
         summary_with_transcript = f"### {transcript_section_title}\n\n> {display_transcription}\n\n---\n\n{summary_text}"
 
         pdf_bytes = generate_pdf_bytes(summary_text, display_transcription, doc_name, pat_name, current_date)
