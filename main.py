@@ -28,10 +28,10 @@ app.add_middleware(
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 
 latest_data = {
-    "transcription": "No audio transcribed yet.", 
-    "summary": "No report generated yet.", 
-    "doctor": "Dr. Zainab", 
-    "patient": "Patient", 
+    "transcription": "No audio transcribed yet.",
+    "summary": "No report generated yet.",
+    "doctor": "Dr. Zainab",
+    "patient": "Patient",
     "date": datetime.now().strftime("%Y-%m-%d")
 }
 
@@ -39,16 +39,33 @@ latest_data = {
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
-def normalize_audio_to_wav(audio_bytes: bytes) -> bytes:
+def normalize_audio_to_wav(audio_bytes: bytes, filename: str = "") -> bytes:
+    """
+    Converts any input audio format (OGG, MP3, M4A, AAC, WEBM, WAV, etc.)
+    into a standardized single-channel 16kHz WAV byte stream.
+    """
     try:
-        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        # Determine format hint from filename if available
+        ext = os.path.splitext(filename)[1].replace(".", "").lower() if filename else None
+        
+        # Try reading with format hint first, fallback to automatic detection
+        try:
+            if ext:
+                audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format=ext)
+            else:
+                audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        except Exception:
+            # Fallback auto-detection without explicit format hint
+            audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+
+        # Standardize channels and sample rate for Whisper / SpeechRecognition
         audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
         wav_io = io.BytesIO()
         audio_segment.export(wav_io, format="wav")
         return wav_io.getvalue()
     except Exception as e:
         print(f"Audio normalization error: {e}")
-        return audio_bytes  # fall back to original bytes if conversion fails
+        return audio_bytes  # Fall back to original bytes if conversion fails
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
     API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
@@ -101,7 +118,7 @@ def transcribe_audio_fallback(audio_bytes: bytes) -> str:
 
 def transcribe_long_audio(audio_bytes: bytes, chunk_seconds: int = 60) -> str:
     try:
-        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format="wav")
     except Exception as e:
         print(f"Long audio load error: {e}")
         return transcribe_audio_fallback(audio_bytes)
@@ -330,12 +347,14 @@ async def process_audio(
     current_date = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        audio_content = await audio.read()
-        audio_content = normalize_audio_to_wav(audio_content)
+        raw_audio_content = await audio.read()
+        
+        # Pass filename to assist format auto-detection (e.g., .ogg, .mp3, .m4a)
+        audio_content = normalize_audio_to_wav(raw_audio_content, filename=audio.filename or "")
 
-        # Check audio duration
+        # Check audio duration using converted WAV bytes
         try:
-            duration_seconds = len(AudioSegment.from_file(io.BytesIO(audio_content))) / 1000
+            duration_seconds = len(AudioSegment.from_file(io.BytesIO(audio_content), format="wav")) / 1000
         except Exception:
             duration_seconds = 0
 
