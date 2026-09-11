@@ -179,38 +179,44 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
     return ""
 
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    # 1. First Try Google Speech Recognition (Urdu Script)
+    # 1. Try HF Whisper FIRST — it auto-detects the spoken language (Urdu vs English vs
+    #    mixed) and transcribes in that language's own native script, rather than us
+    #    forcing a language guess. This avoids the garbled/mixed-up text that happened
+    #    when Google's Urdu recognizer was forced onto English (or mixed) speech.
+    text_hf = transcribe_audio_hf(audio_bytes)
+    if text_hf and len(text_hf.strip()) > 1:
+        print(f"[TRANSCRIBE] Used HF Whisper. Result: {text_hf.strip()[:200]}")
+        return text_hf.strip()
+    print("[TRANSCRIBE] HF Whisper returned nothing usable, falling back to Google SR.")
+
+    # 2. Fallback: Google Speech Recognition, Urdu first
     recognizer = sr.Recognizer()
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             recognizer.adjust_for_ambient_noise(source, duration=0.2)
             audio_data = recognizer.record(source)
-            # Urdu Try
             text = recognizer.recognize_google(audio_data, language="ur-PK")
             if text and len(text.strip()) > 1:
-                return text.strip()  # Direct Urdu Script return
+                print(f"[TRANSCRIBE] Used Google SR (ur-PK) FALLBACK. Result: {text.strip()[:200]}")
+                return text.strip()
     except Exception as e:
         print(f"Urdu SR Error: {e}")
 
+    # 3. Fallback: Google Speech Recognition, English
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             audio_data = recognizer.record(source)
-            # English Try
             text = recognizer.recognize_google(audio_data, language="en-US")
             if text and len(text.strip()) > 1:
+                print(f"[TRANSCRIBE] Used Google SR (en-US) FALLBACK. Result: {text.strip()[:200]}")
                 return text.strip()
     except Exception as e:
         print(f"English SR Error: {e}")
 
-    # 2. Backup HF Whisper API
-    text_hf = transcribe_audio_hf(audio_bytes)
-    if text_hf and len(text_hf.strip()) > 1:
-        return text_hf.strip()
-
     return ""
-    
+
 def transcribe_long_audio(audio_bytes: bytes, chunk_seconds: int = 60) -> str:
     try:
         # audio_bytes here is already a normalized WAV (see process_audio), so no format hint needed.
@@ -519,10 +525,10 @@ async def process_audio(
         if duration_seconds > LONG_AUDIO_THRESHOLD_SECONDS:
             full_transcript = transcribe_long_audio(audio_content)
             transcribed_text = extract_medical_terms(full_transcript, doc_name, pat_name)
-            transcript_section_title = "🎙️ Voice Recording (Transcribed) [BUILD-v2]"
+            transcript_section_title = "🎙️ Voice Recording (Transcribed)"
         else:
             transcribed_text = transcribe_audio_fallback(audio_content)
-            transcript_section_title = "🎙️ Voice Recording (Transcribed) [BUILD-v2]"
+            transcript_section_title = "🎙️ Voice Recording (Transcribed)"
 
         display_transcription = transcribed_text if transcribed_text else "Audio recorded but transcription was unclear."
         display_transcription = convert_hindi_script_to_urdu(display_transcription)
