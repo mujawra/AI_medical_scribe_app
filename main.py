@@ -157,35 +157,37 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
     return ""
 
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    # 1. First Try Google Speech Recognition (Urdu Script)
+    # 1. Try HF Whisper FIRST — it auto-detects the spoken language (Urdu vs English vs
+    #    mixed) and transcribes in that language's own native script, rather than us
+    #    forcing a language guess. This avoids the garbled/mixed-up text that happened
+    #    when Google's Urdu recognizer was forced onto English (or mixed) speech.
+    text_hf = transcribe_audio_hf(audio_bytes)
+    if text_hf and len(text_hf.strip()) > 1:
+        return text_hf.strip()
+
+    # 2. Fallback: Google Speech Recognition, Urdu first
     recognizer = sr.Recognizer()
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             recognizer.adjust_for_ambient_noise(source, duration=0.2)
             audio_data = recognizer.record(source)
-            # Urdu Try
             text = recognizer.recognize_google(audio_data, language="ur-PK")
             if text and len(text.strip()) > 1:
-                return text.strip()  # Direct Urdu Script return
+                return text.strip()
     except Exception as e:
         print(f"Urdu SR Error: {e}")
 
+    # 3. Fallback: Google Speech Recognition, English
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             audio_data = recognizer.record(source)
-            # English Try
             text = recognizer.recognize_google(audio_data, language="en-US")
             if text and len(text.strip()) > 1:
                 return text.strip()
     except Exception as e:
         print(f"English SR Error: {e}")
-
-    # 2. Backup HF Whisper API
-    text_hf = transcribe_audio_hf(audio_bytes)
-    if text_hf and len(text_hf.strip()) > 1:
-        return text_hf.strip()
 
     return ""
 
@@ -413,18 +415,26 @@ def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, rep
     return pdf_bytes
 
 def contains_devanagari(text: str) -> bool:
-    """Detects if text contains Devanagari (Hindi script) characters."""
-    return any('\u0900' <= ch <= '\u097F' for ch in text)
+    """
+    Detects if text contains a SUBSTANTIAL amount of Devanagari (Hindi script) —
+    not just a stray character, since a lone mis-recognized character usually means
+    the source audio itself was unclear, not that the whole transcript is in Hindi script.
+    """
+    if not text:
+        return False
+    devanagari_count = sum(1 for ch in text if '\u0900' <= ch <= '\u097F')
+    return devanagari_count >= 3
 
 def convert_hindi_script_to_urdu(text: str) -> str:
     """
     Google's ur-PK recognizer occasionally returns Devanagari (Hindi script) instead
     of Urdu (Perso-Arabic) script, since spoken Hindi and Urdu are the same language
     (Hindustani) and only differ in writing system. This converts the script to Urdu
-    while keeping the exact same words — a transliteration, not a translation.
-    Falls back to the original text if the conversion call fails.
+    while keeping the exact same words, in the exact same order — a pure script
+    transliteration, not a translation and not a "cleanup". Falls back to the
+    original text if the conversion call fails.
     """
-    if not text or not contains_devanagari(text):
+    if not contains_devanagari(text):
         return text
 
     ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
@@ -435,7 +445,7 @@ def convert_hindi_script_to_urdu(text: str) -> str:
     messages = [
         {
             "role": "system",
-            "content": "You convert Hindi text written in Devanagari script into Urdu (Perso-Arabic/Nastaliq) script. Hindi and Urdu are the same spoken language (Hindustani) — only the writing system differs. Keep the exact same words and meaning; only change the script. Any English words already in Latin letters (like 'abdomen', 'pain', 'chest') should stay exactly as they are, unchanged. Output ONLY the converted text, nothing else — no quotes, no explanation."
+            "content": "You convert Hindi text written in Devanagari script into Urdu (Perso-Arabic/Nastaliq) script. Hindi and Urdu are the same spoken language (Hindustani) — only the writing system differs. STRICT RULES: (1) Keep the exact same words, in the EXACT same order as given — do not reorder, rephrase, summarize, or 'fix' anything, even if the sentence sounds broken or unclear. (2) Any word already in Latin/English letters must stay exactly as-is, unchanged, in its original position. (3) Only change Devanagari characters into their Urdu-script equivalent, word for word. Output ONLY the converted text, nothing else — no quotes, no explanation."
         },
         {"role": "user", "content": text}
     ]
