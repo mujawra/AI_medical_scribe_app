@@ -262,7 +262,7 @@ Output ONLY a short bullet list of medical terms/phrases (translated to English)
     ]
     payload_base = {
         "messages": messages,
-        "temperature": 0.0,
+        "temperature": 0.2,
         "max_tokens": 500
     }
     for model_id in ["Qwen/Qwen2.5-7B-Instruct:fastest", "meta-llama/Llama-3.1-8B-Instruct:fastest"]:
@@ -365,7 +365,7 @@ Format strictly as:
         payload = {
             "model": model_id,
             "messages": messages,
-            "temperature": 0.0,
+            "temperature": 0.2,
             "max_tokens": 800
         }
         try:
@@ -440,27 +440,24 @@ def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, rep
         
     return pdf_bytes
 
-def contains_devanagari(text: str) -> bool:
+def format_transcript_for_display(text: str) -> str:
     """
-    Detects if text contains ANY Devanagari (Hindi script) characters. Even a single
-    stray Devanagari word should be converted, since the conversion prompt strictly
-    preserves word order and only changes script — so there's no downside to catching
-    small amounts too.
-    """
-    if not text:
-        return False
-    return any('\u0900' <= ch <= '\u097F' for ch in text)
+    Produces the final "Voice Recording (Transcribed)" text shown to the user.
 
-def convert_hindi_script_to_urdu(text: str) -> str:
+    Rule: figure out the DOMINANT spoken language of the recording.
+    - If the recording is primarily Urdu/Hindustani (even if a few English words like
+      "pain" or "chest" are mixed in, which is normal code-switching in Pakistani
+      clinics), the ENTIRE line is written in Urdu (Nastaliq) script — including
+      those English words, spelled phonetically in Urdu script (e.g. "pain" -> "پین").
+      Any stray Devanagari (Hindi script) from the speech recognizer is also converted
+      to Urdu script here.
+    - If the recording is primarily English, it is left as clean English — not forced
+      into Urdu.
+    Always preserves the original words/meaning and their order; never invents,
+    reorders, or "fixes" content. Falls back to the original raw text if the model
+    call fails, so the user never sees an empty transcript.
     """
-    Google's ur-PK recognizer occasionally returns Devanagari (Hindi script) instead
-    of Urdu (Perso-Arabic) script, since spoken Hindi and Urdu are the same language
-    (Hindustani) and only differ in writing system. This converts the script to Urdu
-    while keeping the exact same words, in the exact same order — a pure script
-    transliteration, not a translation and not a "cleanup". Falls back to the
-    original text if the conversion call fails.
-    """
-    if not contains_devanagari(text):
+    if not text or not text.strip():
         return text
 
     ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
@@ -471,12 +468,28 @@ def convert_hindi_script_to_urdu(text: str) -> str:
     messages = [
         {
             "role": "system",
-            "content": "You convert Hindi text written in Devanagari script into Urdu (Perso-Arabic/Nastaliq) script. Hindi and Urdu are the same spoken language (Hindustani) — only the writing system differs. STRICT RULES: (1) Keep the exact same words, in the EXACT same order as given — do not reorder, rephrase, summarize, or 'fix' anything, even if the sentence sounds broken or unclear. (2) Any word already in Latin/English letters must stay exactly as-is, unchanged, in its original position. (3) Any word already in Urdu (Perso-Arabic) script must stay exactly as-is, unchanged, in its original position. (4) The input may be mostly Urdu script with only one or two stray Devanagari words mixed in — in that case, convert ONLY those Devanagari words to Urdu script and leave every other word completely untouched. Output ONLY the converted text, nothing else — no quotes, no explanation."
+            "content": (
+                "You are formatting a speech-to-text transcript for display. First, determine the "
+                "DOMINANT spoken language of the transcript: Urdu/Hindustani, or English.\n\n"
+                "CASE A — dominant language is Urdu/Hindustani (this includes text that arrived in "
+                "Devanagari/Hindi script, since spoken Hindi and Urdu are the same language and only "
+                "differ in script; and includes Urdu sentences with a few English words mixed in, "
+                "which is normal code-switching): rewrite the ENTIRE line in Urdu (Perso-Arabic/"
+                "Nastaliq) script. Any embedded English words (e.g. 'pain', 'chest', 'abdomen') must "
+                "also be written phonetically in Urdu script, not left in Latin letters.\n\n"
+                "CASE B — dominant language is English: output the text as clean, correctly spelled "
+                "English, in Latin script.\n\n"
+                "STRICT RULES (both cases): keep the exact same words and meaning, in the exact same "
+                "order as given — do not reorder, rephrase, summarize, translate the meaning, or add "
+                "anything not present. This is a script/spelling formatting pass only, not a rewrite. "
+                "Output ONLY the final formatted text, nothing else — no quotes, no explanation, no "
+                "case label."
+            )
         },
         {"role": "user", "content": text}
     ]
-    payload_base = {"messages": messages, "temperature": 0.0, "max_tokens": 300}
-    for model_id in ["Qwen/Qwen2.5-7B-Instruct:fastest", "meta-llama/Llama-3.1-8B-Instruct:fastest"]:
+    payload_base = {"messages": messages, "temperature": 0.2, "max_tokens": 400}
+    for model_id in ["meta-llama/Llama-3.1-8B-Instruct:fastest", "Qwen/Qwen2.5-7B-Instruct:fastest"]:
         payload = {**payload_base, "model": model_id}
         try:
             res = requests.post(ROUTER_URL, headers=headers, json=payload, timeout=20)
@@ -487,12 +500,12 @@ def convert_hindi_script_to_urdu(text: str) -> str:
                     if output:
                         return output
             else:
-                print(f"Hindi->Urdu script conversion HTTP {res.status_code} from {model_id}: {res.text[:300]}")
+                print(f"Transcript formatting HTTP {res.status_code} from {model_id}: {res.text[:300]}")
         except Exception as e:
-            print(f"Hindi->Urdu script conversion error ({model_id}): {e}")
+            print(f"Transcript formatting error ({model_id}): {e}")
             continue
 
-    return text  # fall back to original script if conversion fails
+    return text  # fall back to the original raw text if every model call fails
 
 @app.post("/process-audio")
 @app.post("/process-audio/")
@@ -531,7 +544,7 @@ async def process_audio(
             transcript_section_title = "🎙️ Voice Recording (Transcribed)"
 
         display_transcription = transcribed_text if transcribed_text else "Audio recorded but transcription was unclear."
-        display_transcription = convert_hindi_script_to_urdu(display_transcription)
+        display_transcription = format_transcript_for_display(display_transcription)
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
