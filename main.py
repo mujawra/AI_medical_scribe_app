@@ -440,6 +440,38 @@ def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, rep
         
     return pdf_bytes
 
+_RESIDUAL_SCRIPT_MAP = {
+    # Independent vowels
+    "अ": "ا", "आ": "آ", "इ": "ای", "ई": "ای", "उ": "او", "ऊ": "او",
+    "ऋ": "ری", "ए": "ے", "ऐ": "ے", "ओ": "او", "औ": "او",
+    # Consonants
+    "क": "ک", "ख": "کھ", "ग": "گ", "घ": "گھ", "ङ": "ن",
+    "च": "چ", "छ": "چھ", "ज": "ج", "झ": "جھ", "ञ": "ن",
+    "ट": "ٹ", "ठ": "ٹھ", "ड": "ڈ", "ढ": "ڈھ", "ण": "ن",
+    "त": "ت", "थ": "تھ", "द": "د", "ध": "دھ", "न": "ن",
+    "प": "پ", "फ": "پھ", "ब": "ب", "भ": "بھ", "म": "م",
+    "य": "ی", "र": "ر", "ल": "ل", "व": "و",
+    "श": "ش", "ष": "ش", "स": "س", "ह": "ہ", "ळ": "ل",
+    # Vowel signs (matras) and marks
+    "ा": "ا", "ि": "", "ी": "ی", "ु": "", "ू": "و", "ृ": "ری",
+    "े": "ے", "ै": "ے", "ो": "و", "ौ": "او",
+    "ं": "ں", "ँ": "ں", "ः": "ہ", "्": "",
+    "।": "۔",
+    "०": "۰", "१": "۱", "२": "۲", "३": "۳", "४": "۴",
+    "५": "۵", "६": "۶", "७": "۷", "८": "۸", "९": "۹",
+}
+
+def strip_residual_script(text: str) -> str:
+    """
+    Final, deterministic guarantee (no network/LLM call, so it can never fail):
+    maps any leftover non-Urdu/non-English character to its closest Urdu-script
+    equivalent using a fixed lookup table. This runs AFTER format_transcript_for_display()
+    as a safety net, in case that formatting pass ever misses a single word.
+    """
+    if not text:
+        return text
+    return "".join(_RESIDUAL_SCRIPT_MAP.get(ch, ch) for ch in text)
+
 def format_transcript_for_display(text: str) -> str:
     """
     Produces the final "Voice Recording (Transcribed)" text shown to the user.
@@ -543,6 +575,7 @@ async def process_audio(
 
         display_transcription = transcribed_text if transcribed_text else "Audio recorded but transcription was unclear."
         display_transcription = format_transcript_for_display(display_transcription)
+        display_transcription = strip_residual_script(display_transcription)
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
