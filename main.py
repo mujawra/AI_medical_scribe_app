@@ -6,14 +6,21 @@ import requests
 import io
 import base64
 import tempfile
+from typing import Optional
 import speech_recognition as sr
 from pydub import AudioSegment
 import imageio_ffmpeg
 from datetime import datetime
 from fpdf import FPDF
 
-# Vercel serverless has no system ffmpeg — imageio_ffmpeg ships a static binary via pip.
-AudioSegment.converter = imageio_ffmpeg.get_ffmpeg_exe()
+# Vercel serverless has no system ffmpeg/ffprobe — imageio_ffmpeg ships a static ffmpeg binary via pip.
+FFMPEG_PATH = imageio_ffmpeg.get_ffmpeg_exe()
+AudioSegment.converter = FFMPEG_PATH
+AudioSegment.ffmpeg = FFMPEG_PATH
+# NOTE: there is no bundled ffprobe. We avoid needing it at all by always passing an
+# explicit `format=` to AudioSegment.from_file() (see normalize_audio_to_wav below),
+# which stops pydub from trying to auto-probe the file and failing silently on
+# non-WAV formats (OGG, MP3, M4A, AAC, AMR, 3GP, etc. — common on Android).
 
 app = FastAPI()
 
@@ -39,7 +46,83 @@ latest_data = {
 def home():
     return {"status": "FastAPI Backend is Live on Vercel!"}
 
-def normalize_audio_to_wav(audio_bytes: bytes) -> bytes:
+# Maps common file extensions (from the uploaded filename) and MIME content-types
+# to the format string ffmpeg expects. Covers what browsers/Android record in.
+EXTENSION_FORMAT_MAP = {
+    "wav": "wav", "wave": "wav",
+    "mp3": "mp3",
+    "m4a": "m4a", "mp4": "mp4",
+    "aac": "aac",
+    "ogg": "ogg", "oga": "ogg", "opus": "ogg",
+    "webm": "webm",
+    "flac": "flac",
+    "wma": "asf",
+    "amr": "amr",
+    "3gp": "3gp", "3gpp": "3gp",
+}
+
+CONTENT_TYPE_FORMAT_MAP = {
+    "audio/wav": "wav", "audio/x-wav": "wav", "audio/wave": "wav",
+    "audio/mpeg": "mp3", "audio/mp3": "mp3",
+    "audio/mp4": "mp4", "audio/x-m4a": "m4a", "audio/m4a": "m4a",
+    "audio/aac": "aac",
+    "audio/ogg": "ogg", "audio/opus": "ogg",
+    "audio/webm": "webm",
+    "audio/flac": "flac", "audio/x-flac": "flac",
+    "audio/x-ms-wma": "asf",
+    "audio/amr": "amr", "audio/3gpp": "3gp",
+}
+
+def guess_audio_format(filename: str, content_type: str) -> Optional[str]:
+    """
+    Figures out the ffmpeg format name from the upload's filename extension first
+    (most reliable), falling back to the browser/device-reported content-type.
+    Returns None if we genuinely can't tell — pydub will then attempt auto-detection,
+    which works for some formats but not others (see note above).
+    """
+    if filename and "." in filename:
+        ext = filename.rsplit(".", 1)[-1].lower().strip()
+        if ext in EXTENSION_FORMAT_MAP:
+            return EXTENSION_FORMAT_MAP[ext]
+
+    if content_type:
+        ct = content_type.split(";")[0].strip().lower()
+        if ct in CONTENT_TYPE_FORMAT_MAP:
+            return CONTENT_TYPE_FORMAT_MAP[ct]
+
+    return None
+
+def normalize_audio_to_wav(audio_bytes: bytes, filename: str = "", content_type: str = "") -> bytes:
+    """
+    Converts whatever audio format comes in (WAV, MP3, M4A, AAC, OGG, WebM, FLAC,
+    WMA, AMR, 3GP — covering laptop and Android recordings alike) into a clean
+    16kHz mono WAV, using ffmpeg directly via an explicit format hint so pydub
+    never needs the missing ffprobe binary.
+    """
+    detected_format = guess_audio_format(filename, content_type)
+
+    # Try the detected/likely format first, then fall back to a couple of common
+    # alternates, then finally let pydub attempt full auto-detection as a last resort.
+    candidate_formats = []
+    if detected_format:
+        candidate_formats.append(detected_format)
+    for fmt in ["ogg", "webm", "mp3", "m4a", "wav", "aac", "3gp", "amr"]:
+        if fmt not in candidate_formats:
+            candidate_formats.append(fmt)
+
+    last_error = None
+    for fmt in candidate_formats:
+        try:
+            audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format=fmt)
+            audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
+            wav_io = io.BytesIO()
+            audio_segment.export(wav_io, format="wav")
+            return wav_io.getvalue()
+        except Exception as e:
+            last_error = e
+            continue
+
+    # Last resort: let pydub guess with no format hint at all.
     try:
         audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
         audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
@@ -47,12 +130,17 @@ def normalize_audio_to_wav(audio_bytes: bytes) -> bytes:
         audio_segment.export(wav_io, format="wav")
         return wav_io.getvalue()
     except Exception as e:
-        print(f"Audio normalization error: {e}")
-        return audio_bytes  # fall back to original bytes if conversion fails
+        print(f"Audio normalization error (filename={filename!r}, content_type={content_type!r}, "
+              f"detected_format={detected_format!r}): tried {candidate_formats}, "
+              f"last error={last_error}, final error={e}")
+        return audio_bytes  # fall back to original bytes if every attempt fails
 
 def transcribe_audio_hf(audio_bytes: bytes) -> str:
     API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "audio/wav",  # audio_bytes here is always our normalized WAV output
+    }
     try:
         response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
         if response.status_code == 200:
@@ -62,46 +150,51 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
             if any(h.lower() in extracted_text.lower() for h in hallucinations) and len(extracted_text.split()) < 4:
                 return ""
             return extracted_text
+        else:
+            print(f"HF Whisper HTTP {response.status_code}: {response.text[:300]}")
     except Exception as e:
         print(f"HF Whisper Error: {e}")
     return ""
 
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    # 1. First Try Google Speech Recognition (Urdu Script)
+    # 1. Try HF Whisper FIRST — it auto-detects the spoken language (Urdu vs English vs
+    #    mixed) and transcribes in that language's own native script, rather than us
+    #    forcing a language guess. This avoids the garbled/mixed-up text that happened
+    #    when Google's Urdu recognizer was forced onto English (or mixed) speech.
+    text_hf = transcribe_audio_hf(audio_bytes)
+    if text_hf and len(text_hf.strip()) > 1:
+        return text_hf.strip()
+
+    # 2. Fallback: Google Speech Recognition, Urdu first
     recognizer = sr.Recognizer()
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             recognizer.adjust_for_ambient_noise(source, duration=0.2)
             audio_data = recognizer.record(source)
-            # Urdu Try
             text = recognizer.recognize_google(audio_data, language="ur-PK")
             if text and len(text.strip()) > 1:
-                return text.strip()  # Direct Urdu Script return
+                return text.strip()
     except Exception as e:
         print(f"Urdu SR Error: {e}")
 
+    # 3. Fallback: Google Speech Recognition, English
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             audio_data = recognizer.record(source)
-            # English Try
             text = recognizer.recognize_google(audio_data, language="en-US")
             if text and len(text.strip()) > 1:
                 return text.strip()
     except Exception as e:
         print(f"English SR Error: {e}")
 
-    # 2. Backup HF Whisper API
-    text_hf = transcribe_audio_hf(audio_bytes)
-    if text_hf and len(text_hf.strip()) > 1:
-        return text_hf.strip()
-
     return ""
 
 def transcribe_long_audio(audio_bytes: bytes, chunk_seconds: int = 60) -> str:
     try:
-        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        # audio_bytes here is already a normalized WAV (see process_audio), so no format hint needed.
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format="wav")
     except Exception as e:
         print(f"Long audio load error: {e}")
         return transcribe_audio_fallback(audio_bytes)
@@ -156,6 +249,8 @@ Output ONLY a short bullet list of medical terms/phrases (translated to English)
                     output = result["choices"][0]["message"]["content"].strip()
                     if output:
                         return output
+            else:
+                print(f"Medical term extraction HTTP {res.status_code} from {model_id}: {res.text[:300]}")
         except Exception as e:
             print(f"Medical term extraction error ({model_id}): {e}")
             continue
@@ -255,6 +350,8 @@ Format strictly as:
                     output = result["choices"][0]["message"]["content"].strip()
                     if output:
                         return output
+            else:
+                print(f"Report generation HTTP {res.status_code} from {model_id}: {res.text[:300]}")
         except Exception as err:
             print(f"Error calling {model_id}: {err}")
             continue
@@ -317,6 +414,60 @@ def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, rep
         
     return pdf_bytes
 
+def contains_devanagari(text: str) -> bool:
+    """
+    Detects if text contains a SUBSTANTIAL amount of Devanagari (Hindi script) —
+    not just a stray character, since a lone mis-recognized character usually means
+    the source audio itself was unclear, not that the whole transcript is in Hindi script.
+    """
+    if not text:
+        return False
+    devanagari_count = sum(1 for ch in text if '\u0900' <= ch <= '\u097F')
+    return devanagari_count >= 3
+
+def convert_hindi_script_to_urdu(text: str) -> str:
+    """
+    Google's ur-PK recognizer occasionally returns Devanagari (Hindi script) instead
+    of Urdu (Perso-Arabic) script, since spoken Hindi and Urdu are the same language
+    (Hindustani) and only differ in writing system. This converts the script to Urdu
+    while keeping the exact same words, in the exact same order — a pure script
+    transliteration, not a translation and not a "cleanup". Falls back to the
+    original text if the conversion call fails.
+    """
+    if not contains_devanagari(text):
+        return text
+
+    ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": "You convert Hindi text written in Devanagari script into Urdu (Perso-Arabic/Nastaliq) script. Hindi and Urdu are the same spoken language (Hindustani) — only the writing system differs. STRICT RULES: (1) Keep the exact same words, in the EXACT same order as given — do not reorder, rephrase, summarize, or 'fix' anything, even if the sentence sounds broken or unclear. (2) Any word already in Latin/English letters must stay exactly as-is, unchanged, in its original position. (3) Only change Devanagari characters into their Urdu-script equivalent, word for word. Output ONLY the converted text, nothing else — no quotes, no explanation."
+        },
+        {"role": "user", "content": text}
+    ]
+    payload_base = {"messages": messages, "temperature": 0.0, "max_tokens": 300}
+    for model_id in ["Qwen/Qwen2.5-7B-Instruct:fastest", "meta-llama/Llama-3.1-8B-Instruct:fastest"]:
+        payload = {**payload_base, "model": model_id}
+        try:
+            res = requests.post(ROUTER_URL, headers=headers, json=payload, timeout=20)
+            if res.status_code == 200:
+                result = res.json()
+                if "choices" in result and len(result["choices"]) > 0:
+                    output = result["choices"][0]["message"]["content"].strip()
+                    if output:
+                        return output
+            else:
+                print(f"Hindi->Urdu script conversion HTTP {res.status_code} from {model_id}: {res.text[:300]}")
+        except Exception as e:
+            print(f"Hindi->Urdu script conversion error ({model_id}): {e}")
+            continue
+
+    return text  # fall back to original script if conversion fails
+
 @app.post("/process-audio")
 @app.post("/process-audio/")
 async def process_audio(
@@ -331,11 +482,15 @@ async def process_audio(
 
     try:
         audio_content = await audio.read()
-        audio_content = normalize_audio_to_wav(audio_content)
+        audio_content = normalize_audio_to_wav(
+            audio_content,
+            filename=audio.filename or "",
+            content_type=audio.content_type or "",
+        )
 
         # Check audio duration
         try:
-            duration_seconds = len(AudioSegment.from_file(io.BytesIO(audio_content))) / 1000
+            duration_seconds = len(AudioSegment.from_file(io.BytesIO(audio_content), format="wav")) / 1000
         except Exception:
             duration_seconds = 0
 
@@ -350,6 +505,7 @@ async def process_audio(
             transcript_section_title = "🎙️ Voice Recording (Transcribed)"
 
         display_transcription = transcribed_text if transcribed_text else "Audio recorded but transcription was unclear."
+        display_transcription = convert_hindi_script_to_urdu(display_transcription)
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
