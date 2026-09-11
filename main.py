@@ -442,14 +442,14 @@ def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, rep
 
 def contains_devanagari(text: str) -> bool:
     """
-    Detects if text contains a SUBSTANTIAL amount of Devanagari (Hindi script) —
-    not just a stray character, since a lone mis-recognized character usually means
-    the source audio itself was unclear, not that the whole transcript is in Hindi script.
+    Detects if text contains ANY Devanagari (Hindi script) characters. Even a single
+    stray Devanagari word should be converted, since the conversion prompt strictly
+    preserves word order and only changes script — so there's no downside to catching
+    small amounts too.
     """
     if not text:
         return False
-    devanagari_count = sum(1 for ch in text if '\u0900' <= ch <= '\u097F')
-    return devanagari_count >= 3
+    return any('\u0900' <= ch <= '\u097F' for ch in text)
 
 def convert_hindi_script_to_urdu(text: str) -> str:
     """
@@ -471,7 +471,7 @@ def convert_hindi_script_to_urdu(text: str) -> str:
     messages = [
         {
             "role": "system",
-            "content": "You convert Hindi text written in Devanagari script into Urdu (Perso-Arabic/Nastaliq) script. Hindi and Urdu are the same spoken language (Hindustani) — only the writing system differs. STRICT RULES: (1) Keep the exact same words, in the EXACT same order as given — do not reorder, rephrase, summarize, or 'fix' anything, even if the sentence sounds broken or unclear. (2) Any word already in Latin/English letters must stay exactly as-is, unchanged, in its original position. (3) Only change Devanagari characters into their Urdu-script equivalent, word for word. Output ONLY the converted text, nothing else — no quotes, no explanation."
+            "content": "You convert Hindi text written in Devanagari script into Urdu (Perso-Arabic/Nastaliq) script. Hindi and Urdu are the same spoken language (Hindustani) — only the writing system differs. STRICT RULES: (1) Keep the exact same words, in the EXACT same order as given — do not reorder, rephrase, summarize, or 'fix' anything, even if the sentence sounds broken or unclear. (2) Any word already in Latin/English letters must stay exactly as-is, unchanged, in its original position. (3) Any word already in Urdu (Perso-Arabic) script must stay exactly as-is, unchanged, in its original position. (4) The input may be mostly Urdu script with only one or two stray Devanagari words mixed in — in that case, convert ONLY those Devanagari words to Urdu script and leave every other word completely untouched. Output ONLY the converted text, nothing else — no quotes, no explanation."
         },
         {"role": "user", "content": text}
     ]
