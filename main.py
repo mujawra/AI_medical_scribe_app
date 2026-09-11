@@ -445,11 +445,11 @@ def format_transcript_for_display(text: str) -> str:
     Produces the final "Voice Recording (Transcribed)" text shown to the user.
 
     Rule: figure out the DOMINANT spoken language of the recording.
-    - If the recording is primarily Urdu/Hindustani (even if a few English words like
+    - If the recording is primarily Urdu (even if a few English words like
       "pain" or "chest" are mixed in, which is normal code-switching in Pakistani
       clinics), the ENTIRE line is written in Urdu (Nastaliq) script — including
       those English words, spelled phonetically in Urdu script (e.g. "pain" -> "پین").
-      Any stray Devanagari (Hindi script) from the speech recognizer is also converted
+      Any stray Devanagari script from the speech recognizer is also converted
       to Urdu script here.
     - If the recording is primarily English, it is left as clean English — not forced
       into Urdu.
@@ -470,13 +470,13 @@ def format_transcript_for_display(text: str) -> str:
             "role": "system",
             "content": (
                 "You are formatting a speech-to-text transcript for display. First, determine the "
-                "DOMINANT spoken language of the transcript: Urdu/Hindustani, or English.\n\n"
-                "CASE A — dominant language is Urdu/Hindustani (this includes text that arrived in "
-                "Devanagari/Hindi script, since spoken Hindi and Urdu are the same language and only "
-                "differ in script; and includes Urdu sentences with a few English words mixed in, "
-                "which is normal code-switching): rewrite the ENTIRE line in Urdu (Perso-Arabic/"
-                "Nastaliq) script. Any embedded English words (e.g. 'pain', 'chest', 'abdomen') must "
-                "also be written phonetically in Urdu script, not left in Latin letters.\n\n"
+                "DOMINANT spoken language of the transcript: Urdu, or English.\n\n"
+                "CASE A — dominant language is Urdu (this includes text that arrived in Devanagari "
+                "script, since speech recognizers occasionally output Urdu speech in Devanagari script "
+                "by mistake; and includes Urdu sentences with a few English words mixed in, which is "
+                "normal code-switching): rewrite the ENTIRE line in Urdu (Perso-Arabic/Nastaliq) script. "
+                "Any embedded English words (e.g. 'pain', 'chest', 'abdomen') must also be written "
+                "phonetically in Urdu script, not left in Latin letters.\n\n"
                 "CASE B — dominant language is English: output the text as clean, correctly spelled "
                 "English, in Latin script.\n\n"
                 "STRICT RULES (both cases): keep the exact same words and meaning, in the exact same "
