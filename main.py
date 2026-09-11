@@ -525,10 +525,10 @@ async def process_audio(
         if duration_seconds > LONG_AUDIO_THRESHOLD_SECONDS:
             full_transcript = transcribe_long_audio(audio_content)
             transcribed_text = extract_medical_terms(full_transcript, doc_name, pat_name)
-            transcript_section_title = "🎙️ Voice Recording (Transcribed)"
+            transcript_section_title = "🎙️ Voice Recording (Transcribed) [BUILD-v2]"
         else:
             transcribed_text = transcribe_audio_fallback(audio_content)
-            transcript_section_title = "🎙️ Voice Recording (Transcribed)"
+            transcript_section_title = "🎙️ Voice Recording (Transcribed) [BUILD-v2]"
 
         display_transcription = transcribed_text if transcribed_text else "Audio recorded but transcription was unclear."
         display_transcription = convert_hindi_script_to_urdu(display_transcription)
