@@ -92,12 +92,30 @@ def guess_audio_format(filename: str, content_type: str) -> Optional[str]:
 
     return None
 
+def loudness_normalize(audio_segment: AudioSegment) -> AudioSegment:
+    """
+    Boosts a quiet recording up to a healthy peak level. WhatsApp/Android voice notes
+    (OGG/Opus) are frequently recorded at a much lower volume than typical WAV
+    recordings, which makes speech recognition engines mishear them — this is a common
+    real cause of 'garbled' transcripts that isn't about format/codec support at all,
+    just perceived loudness. We target a peak of -1 dBFS, capping the boost so we don't
+    amplify noise on an already-loud file.
+    """
+    try:
+        change_needed = -1.0 - audio_segment.max_dBFS
+        if change_needed > 0:  # only boost quiet audio, never reduce already-loud audio
+            change_needed = min(change_needed, 25.0)  # cap extreme boosts (avoids blowing out noise)
+            audio_segment = audio_segment.apply_gain(change_needed)
+    except Exception as e:
+        print(f"Loudness normalization skipped: {e}")
+    return audio_segment
+
 def normalize_audio_to_wav(audio_bytes: bytes, filename: str = "", content_type: str = "") -> bytes:
     """
     Converts whatever audio format comes in (WAV, MP3, M4A, AAC, OGG, WebM, FLAC,
-    WMA, AMR, 3GP — covering laptop and Android recordings alike) into a clean
-    16kHz mono WAV, using ffmpeg directly via an explicit format hint so pydub
-    never needs the missing ffprobe binary.
+    WMA, AMR, 3GP — covering laptop and Android recordings alike) into a clean,
+    loudness-normalized 16kHz mono WAV, using ffmpeg directly via an explicit format
+    hint so pydub never needs the missing ffprobe binary.
     """
     detected_format = guess_audio_format(filename, content_type)
 
@@ -115,8 +133,10 @@ def normalize_audio_to_wav(audio_bytes: bytes, filename: str = "", content_type:
         try:
             audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes), format=fmt)
             audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
+            audio_segment = loudness_normalize(audio_segment)
             wav_io = io.BytesIO()
             audio_segment.export(wav_io, format="wav")
+            print(f"[NORMALIZE] Success with format={fmt!r} (filename={filename!r}, content_type={content_type!r})")
             return wav_io.getvalue()
         except Exception as e:
             last_error = e
@@ -126,8 +146,10 @@ def normalize_audio_to_wav(audio_bytes: bytes, filename: str = "", content_type:
     try:
         audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
         audio_segment = audio_segment.set_channels(1).set_frame_rate(16000)
+        audio_segment = loudness_normalize(audio_segment)
         wav_io = io.BytesIO()
         audio_segment.export(wav_io, format="wav")
+        print(f"[NORMALIZE] Success with NO format hint (auto-detect) (filename={filename!r})")
         return wav_io.getvalue()
     except Exception as e:
         print(f"Audio normalization error (filename={filename!r}, content_type={content_type!r}, "
@@ -157,35 +179,41 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
     return ""
 
 def transcribe_audio_fallback(audio_bytes: bytes) -> str:
-    # 1. First Try Google Speech Recognition (Urdu Script)
+    # 1. Try HF Whisper FIRST — it auto-detects the spoken language (Urdu vs English vs
+    #    mixed) and transcribes in that language's own native script, rather than us
+    #    forcing a language guess. This avoids the garbled/mixed-up text that happened
+    #    when Google's Urdu recognizer was forced onto English (or mixed) speech.
+    text_hf = transcribe_audio_hf(audio_bytes)
+    if text_hf and len(text_hf.strip()) > 1:
+        print(f"[TRANSCRIBE] Used HF Whisper. Result: {text_hf.strip()[:200]}")
+        return text_hf.strip()
+    print("[TRANSCRIBE] HF Whisper returned nothing usable, falling back to Google SR.")
+
+    # 2. Fallback: Google Speech Recognition, Urdu first
     recognizer = sr.Recognizer()
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             recognizer.adjust_for_ambient_noise(source, duration=0.2)
             audio_data = recognizer.record(source)
-            # Urdu Try
             text = recognizer.recognize_google(audio_data, language="ur-PK")
             if text and len(text.strip()) > 1:
-                return text.strip()  # Direct Urdu Script return
+                print(f"[TRANSCRIBE] Used Google SR (ur-PK) FALLBACK. Result: {text.strip()[:200]}")
+                return text.strip()
     except Exception as e:
         print(f"Urdu SR Error: {e}")
 
+    # 3. Fallback: Google Speech Recognition, English
     try:
         audio_file = io.BytesIO(audio_bytes)
         with sr.AudioFile(audio_file) as source:
             audio_data = recognizer.record(source)
-            # English Try
             text = recognizer.recognize_google(audio_data, language="en-US")
             if text and len(text.strip()) > 1:
+                print(f"[TRANSCRIBE] Used Google SR (en-US) FALLBACK. Result: {text.strip()[:200]}")
                 return text.strip()
     except Exception as e:
         print(f"English SR Error: {e}")
-
-    # 2. Backup HF Whisper API
-    text_hf = transcribe_audio_hf(audio_bytes)
-    if text_hf and len(text_hf.strip()) > 1:
-        return text_hf.strip()
 
     return ""
 
