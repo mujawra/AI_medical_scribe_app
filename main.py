@@ -139,7 +139,7 @@ def transcribe_audio_hf(audio_bytes: bytes) -> str:
     API_URL = "https://router.huggingface.co/hf-inference/models/openai/whisper-large-v3-turbo"
     headers = {
         "Authorization": f"Bearer {HF_TOKEN}",
-        "Content-Type": "audio/ogg",  # audio_bytes here is always our normalized ogg output
+        "Content-Type": "audio/wav",  # audio_bytes here is always our normalized WAV output
     }
     try:
         response = requests.post(API_URL, headers=headers, data=audio_bytes, timeout=35)
@@ -412,6 +412,52 @@ def generate_pdf_bytes(summary_text, transcription_text, doc_name, pat_name, rep
         
     return pdf_bytes
 
+def contains_devanagari(text: str) -> bool:
+    """Detects if text contains Devanagari (Hindi script) characters."""
+    return any('\u0900' <= ch <= '\u097F' for ch in text)
+
+def convert_hindi_script_to_urdu(text: str) -> str:
+    """
+    Google's ur-PK recognizer occasionally returns Devanagari (Hindi script) instead
+    of Urdu (Perso-Arabic) script, since spoken Hindi and Urdu are the same language
+    (Hindustani) and only differ in writing system. This converts the script to Urdu
+    while keeping the exact same words — a transliteration, not a translation.
+    Falls back to the original text if the conversion call fails.
+    """
+    if not text or not contains_devanagari(text):
+        return text
+
+    ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {HF_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": "You convert Hindi text written in Devanagari script into Urdu (Perso-Arabic/Nastaliq) script. Hindi and Urdu are the same spoken language (Hindustani) — only the writing system differs. Keep the exact same words and meaning; only change the script. Any English words already in Latin letters (like 'abdomen', 'pain', 'chest') should stay exactly as they are, unchanged. Output ONLY the converted text, nothing else — no quotes, no explanation."
+        },
+        {"role": "user", "content": text}
+    ]
+    payload_base = {"messages": messages, "temperature": 0.0, "max_tokens": 300}
+    for model_id in ["Qwen/Qwen2.5-7B-Instruct:fastest", "meta-llama/Llama-3.1-8B-Instruct:fastest"]:
+        payload = {**payload_base, "model": model_id}
+        try:
+            res = requests.post(ROUTER_URL, headers=headers, json=payload, timeout=20)
+            if res.status_code == 200:
+                result = res.json()
+                if "choices" in result and len(result["choices"]) > 0:
+                    output = result["choices"][0]["message"]["content"].strip()
+                    if output:
+                        return output
+            else:
+                print(f"Hindi->Urdu script conversion HTTP {res.status_code} from {model_id}: {res.text[:300]}")
+        except Exception as e:
+            print(f"Hindi->Urdu script conversion error ({model_id}): {e}")
+            continue
+
+    return text  # fall back to original script if conversion fails
+
 @app.post("/process-audio")
 @app.post("/process-audio/")
 async def process_audio(
@@ -449,6 +495,7 @@ async def process_audio(
             transcript_section_title = "🎙️ Voice Recording (Transcribed)"
 
         display_transcription = transcribed_text if transcribed_text else "Audio recorded but transcription was unclear."
+        display_transcription = convert_hindi_script_to_urdu(display_transcription)
 
         summary_text = generate_medical_report(transcribed_text, doc_name, pat_name)
 
