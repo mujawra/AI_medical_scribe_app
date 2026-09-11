@@ -449,8 +449,7 @@ def format_transcript_for_display(text: str) -> str:
       "pain" or "chest" are mixed in, which is normal code-switching in Pakistani
       clinics), the ENTIRE line is written in Urdu (Nastaliq) script — including
       those English words, spelled phonetically in Urdu script (e.g. "pain" -> "پین").
-      Any stray Devanagari script from the speech recognizer is also converted
-      to Urdu script here.
+      Whatever script the transcript happened to arrive in, the output is always Urdu script.
     - If the recording is primarily English, it is left as clean English — not forced
       into Urdu.
     Always preserves the original words/meaning and their order; never invents,
@@ -471,10 +470,9 @@ def format_transcript_for_display(text: str) -> str:
             "content": (
                 "You are formatting a speech-to-text transcript for display. First, determine the "
                 "DOMINANT spoken language of the transcript: Urdu, or English.\n\n"
-                "CASE A — dominant language is Urdu (this includes text that arrived in Devanagari "
-                "script, since speech recognizers occasionally output Urdu speech in Devanagari script "
-                "by mistake; and includes Urdu sentences with a few English words mixed in, which is "
-                "normal code-switching): rewrite the ENTIRE line in Urdu (Perso-Arabic/Nastaliq) script. "
+                "CASE A — dominant language is Urdu (this includes Urdu sentences with a few English "
+                "words mixed in, which is normal code-switching): rewrite the ENTIRE line in Urdu "
+                "(Perso-Arabic/Nastaliq) script, no matter what script the input text is currently in. "
                 "Any embedded English words (e.g. 'pain', 'chest', 'abdomen') must also be written "
                 "phonetically in Urdu script, not left in Latin letters.\n\n"
                 "CASE B — dominant language is English: output the text as clean, correctly spelled "
