@@ -512,8 +512,12 @@ def format_transcript_for_display(text: str) -> str:
                 "STRICT RULES (both cases): keep the exact same words and meaning, in the exact same "
                 "order as given — do not reorder, rephrase, summarize, translate the meaning, or add "
                 "anything not present. This is a script/spelling formatting pass only, not a rewrite. "
-                "Output ONLY the final formatted text, nothing else — no quotes, no explanation, no "
-                "case label."
+                "Your entire reply must be ONLY the formatted transcript itself, as a SINGLE line — "
+                "absolutely nothing else. NEVER add a note, comment, or parenthetical explanation about "
+                "what you changed or why (for example, never write things like '(the word X was changed "
+                "to Y because...)'). Do not explain your reasoning. Do not add quotes, a case label, or "
+                "any text before or after the transcript. If you add anything beyond the transcript "
+                "itself, that is a failure."
             )
         },
         {"role": "user", "content": text}
@@ -527,6 +531,9 @@ def format_transcript_for_display(text: str) -> str:
                 result = res.json()
                 if "choices" in result and len(result["choices"]) > 0:
                     output = result["choices"][0]["message"]["content"].strip()
+                    # Guarantee: even if the model adds an explanation/note despite instructions,
+                    # only the first line (the actual transcript) is ever used.
+                    output = output.split("\n")[0].strip()
                     if output:
                         return output
             else:
